@@ -44,18 +44,6 @@ class CLIConfig:
 class EntropixConfig:
     def __init__(self):
         # Sampler state toggles
-        ## Low Entropy, Low Varentropy: "flowing with unspoken intent"
-        self.state_flowing = True
-        ## High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
-        self.state_treading = True
-        ## Low Entropy, High Varentropy: "exploring forks in the path"
-        self.state_exploring = True
-        ## High Entropy, High Varentropy: "resampling in the mist"
-        self.state_resampling = True
-
-        # Sampler state extras
-        self.state_extras_agreement = False
-        self.state_extras_interaction_strength = False
 
         # Adaptive state dynamic top_p, top_k, min_p adjustment toggles (old)
         '''self.state_dynamic_top_p = True
@@ -100,22 +88,24 @@ class XfmrWeights(NamedTuple):
     output: torch.Tensor
     layer_weights: list[LayerWeights]
 
-MODEL_ID = 'HuggingFaceTB/SmolLM-360M-Instruct'
-MODEL_PATH = 'weights/360M-Instruct'
-
-SMOLLM_360M_PARAMS = ModelParams(
-    n_layers=params["n_layers"],
-    n_local_heads=params["n_heads"],
-    n_local_kv_heads=params["n_kv_heads"],
-    head_dim=params["dim"] // params["n_heads"],
-    max_seq_len=params["max_seq_len"],
-    rope_theta=params["rope_theta"],
-    use_scaled_rope=params["use_scaled_rope"]
-)
-
 # Experimental custom config to trigger different sampler states
 class SamplerConfig:
     def __init__(self):
+        self.states = {
+            # Low Entropy, Low Varentropy: "flowing with unspoken intent"
+            "flowing": True,
+            # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
+            "treading": True,
+            # Low Entropy, High Varentropy: "exploring forks in the path"
+            "exploring": True,
+            # High Entropy, High Varentropy: "resampling in the mist"
+            "resampling": True,
+            # extras
+            "agreement": False,
+            "interaction_strength": False,
+        }
+
+        # Sampler state extras
         self.temperature = 0.666
         self.top_p = 0.90
         self.top_k = 27

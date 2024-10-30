@@ -1,45 +1,70 @@
 from typing import NamedTuple
-import jax
-import jax.numpy as jnp
+import torch
+from torch.nn import functional as F
+
+LN_2 = 0.69314718056  # ln(2) = 1.0 / LOG2_E
+
+def calculate_varentropy_logsoftmax(logits: torch.Tensor, axis: int = -1) -> tuple[torch.Tensor, torch.Tensor]:
+    """Calculate the entropy and varentropy of the probability distribution using logsoftmax."""
+    log_probs = F.log_softmax(logits, dim=axis)
+    probs = torch.exp(log_probs)
+    entropy = -torch.sum(probs * log_probs, dim=axis) / LN_2  # Convert to base-2
+    varentropy = torch.sum(probs * (log_probs / LN_2 + entropy.unsqueeze(-1))**2, dim=axis)
+    return entropy, varentropy
+
+def calculate_metrics(logits: torch.Tensor, attention_scores: torch.Tensor) -> dict[str, torch.Tensor]:
+    entropy, varentropy = calculate_varentropy_logsoftmax(logits)
+    attention_probs = F.softmax(attention_scores, dim=-1)
+    attn_entropy = -torch.sum(attention_probs * torch.log2(torch.clamp(attention_probs, 1e-10, 1.0)), dim=-1)
+    attn_varentropy = torch.var(attn_entropy, dim=-1)
+
+    # Add a small epsilon to avoid NaN when all values are the same
+    attn_varentropy = torch.where(torch.isnan(attn_varentropy), torch.zeros_like(attn_varentropy), attn_varentropy)
+    mean_attention = torch.mean(attention_probs, dim=1)
+    agreement = torch.mean(torch.abs(attention_probs - mean_attention.unsqueeze(1)), dim=(1, 2))
+
+    interaction_strength = torch.mean(torch.abs(attention_scores), dim=(1, 2, 3))
+
+    return {
+        "logits_entropy": torch.mean(entropy),
+        "logits_varentropy": torch.mean(varentropy),
+        "attn_entropy": torch.mean(attn_entropy),
+        "attn_varentropy": torch.mean(attn_varentropy),
+        "agreement": torch.mean(agreement),
+        "interaction_strength": interaction_strength
+    }
 
 class AttnStats(NamedTuple):
-  entropy: jax.Array  # (bsz, n_layers, num_heads)
-  varentropy: jax.Array  # (bsz, n_layers, num_heads)
-  n_layers: int
-  n_heads: int
+    entropy: torch.Tensor  # (bsz, n_layers, num_heads)
+    varentropy: torch.Tensor  # (bsz, n_layers, num_heads)
+    n_layers: int
+    n_heads: int
 
-  @classmethod
-  def new(cls, bsz: int, n_layers: int, n_heads: int) -> 'AttnStats':
-    return cls(
-        entropy=jnp.zeros((bsz, n_layers, n_heads), dtype=jnp.float32),
-        varentropy=jnp.zeros((bsz, n_layers, n_heads), dtype=jnp.float32),
-        n_layers=n_layers,
-        n_heads=n_heads
-    )
+    @classmethod
+    def new(cls, bsz: int, n_layers: int, n_heads: int, device: torch.device) -> 'AttnStats':
+        return cls(
+            entropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),
+            varentropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),
+            n_layers=n_layers,
+            n_heads=n_heads
+        )
 
-  @property
-  def avg_entropy(self):
-    return self.entropy.sum(axis=-1, keepdims=False)  # Average across heads
+    @property
+    def avg_entropy(self):
+        return self.entropy.sum(dim=-1, keepdim=False)  # Average across heads
 
-  @property
-  def std_error(self):
-    return jnp.sqrt(jnp.mean(self.varentropy)) / (self.n_heads * self.n_layers)
+    @property
+    def std_error(self):
+        return torch.sqrt(torch.mean(self.varentropy)) / (self.n_heads * self.n_layers)
 
-  def update(self, scores: jax.Array, layer_idx: int):
-    # scores shape: (bsz, n_heads, seqlen, n_words)
-    probs = jax.nn.softmax(scores, axis=-1)
-    new_entropy = -jnp.sum(jnp.where(probs > 0, probs * jnp.log(probs), 0), axis=-1)
-    new_varentropy = jnp.sum(probs * (jnp.log(probs) + new_entropy[..., None])**2, axis=-1)
+    def update(self, scores: torch.Tensor, layer_idx: int):
+        # scores shape: (bsz, n_heads, seqlen, n_words)
+        probs = torch.nn.functional.softmax(scores, dim=-1)
+        new_entropy = -torch.sum(torch.where(probs > 0, probs * torch.log(probs), torch.tensor(0.0)), dim=-1)
+        new_varentropy = torch.sum(probs * (torch.log(probs) + new_entropy.unsqueeze(-1))**2, dim=-1)
 
-    # print(f"Layer {layer_idx} - Scores shape: {scores.shape}, Probs shape: {probs.shape}")
-    # print(f"Layer {layer_idx} - New entropy shape: {new_entropy.shape}, Min: {jnp.min(new_entropy)}, Max: {jnp.max(new_entropy)}")
+        # Update entropy and varentropy tensors
+        self.entropy[:, layer_idx, :] = new_entropy
+        self.varentropy[:, layer_idx, :] = new_varentropy
 
-    updated_stats = self._replace(
-        entropy=self.entropy.at[:, layer_idx, :].set(new_entropy),
-        varentropy=self.varentropy.at[:, layer_idx, :].set(new_varentropy)
-    )
-
-    # print(f"Layer {layer_idx} - Updated entropy shape: {updated_stats.entropy.shape}")
-    # print(f"Layer {layer_idx} - Updated entropy for this layer: {updated_stats.entropy[:, layer_idx, :]}")
-
-    return updated_stats
+        return self

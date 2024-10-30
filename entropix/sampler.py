@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Dict
 
-from entropix.metrics import calculate_metrics
+from entropix.stats import calculate_metrics
 from entropix.config import SamplerState, SamplerConfig, EntropixConfig
 
 # Device selection
@@ -13,12 +13,12 @@ elif torch.cuda.is_available():
 else:
     device = torch.device("cpu")
 
-def multinomial_sample_one(probs_sort: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+def multinomial_sample_one(probs_sort: torch.Tensor, generator: torch.Generator | None) -> torch.Tensor:
     """Samples one token from a multinomial distribution with sorted probabilities."""
     q = torch.rand(probs_sort.shape, generator=generator, device=probs_sort.device)
     return torch.argmax(probs_sort / q, dim=-1, keepdim=True).to(torch.int32)
 
-def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, min_p: float, generator: torch.Generator = None) -> torch.Tensor:
+def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, min_p: float, generator: torch.Generator | None = None) -> torch.Tensor:
     bsz = logits.shape[0]
     logit = logits[:, -1]
     probs = F.softmax(logit / temperature, dim=-1)
@@ -43,7 +43,7 @@ def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, 
     next_token_g = torch.gather(probs_idx, -1, next_token.reshape(bsz, 1).to(torch.int64))
     return next_token_g.to(torch.int32)
 
-def adaptive_sample(logits: torch.Tensor, temperature: float, epsilon: float = 0.01, generator: torch.Generator = None) -> torch.Tensor:
+def adaptive_sample(logits: torch.Tensor, temperature: float, epsilon: float = 0.01, generator: torch.Generator | None = None) -> torch.Tensor:
     """
     Perform adaptive sampling by dynamically adjusting the candidate set size based on entropy and varentropy.
     """
@@ -99,8 +99,7 @@ def sample(
     gen_tokens: torch.Tensor,
     logits: torch.Tensor,
     attention_scores: torch.Tensor,
-    cfg: SamplerConfig,
-    entropix_cfg: EntropixConfig,
+    temperature: float,
     clarifying_question_token: int = 2564,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337)
 ) -> Tuple[torch.Tensor, SamplerState]:
@@ -110,21 +109,23 @@ def sample(
     agreement = metrics["agreement"]
     interaction_strength = metrics["interaction_strength"]
 
+    cfg = SamplerConfig()
+
     # Low Entropy, Low Varentropy: "flowing with unspoken intent"
-    if entropix_cfg.state_flowing and (
+    if cfg.states["flowing"] and (
         ent < cfg.low_logits_entropy_threshold and vent < cfg.low_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent < cfg.low_attention_varentropy_threshold and (not entropix_cfg.state_extras_agreement or agreement < cfg.low_agreement_threshold) and
-        (not entropix_cfg.state_extras_interaction_strength or interaction_strength < cfg.low_interaction_strength_threshold)
+        and attn_vent < cfg.low_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
+        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
     ):
         sampler_state = SamplerState.FLOWING
         sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
         return sampled_token, sampler_state
 
     # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
-    elif entropix_cfg.state_treading and (
+    elif cfg.states["treading"] and (
         ent > cfg.high_logits_entropy_threshold and vent < cfg.low_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent < cfg.low_attention_varentropy_threshold and (not entropix_cfg.state_extras_agreement or agreement < cfg.low_agreement_threshold) and
-        (not entropix_cfg.state_extras_interaction_strength or interaction_strength < cfg.low_interaction_strength_threshold)
+        and attn_vent < cfg.low_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
+        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
     ):
         sampler_state = SamplerState.TREADING
         # Insert a clarifying question token if not already present
@@ -140,10 +141,10 @@ def sample(
             return sampled_token, sampler_state
 
     # Low Entropy, High Varentropy: "exploring forks in the path"
-    elif entropix_cfg.state_exploring and (
+    elif cfg.states["exploring"] and (
         ent < cfg.high_logits_entropy_threshold and vent > cfg.high_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent > cfg.high_attention_varentropy_threshold and (not entropix_cfg.state_extras_agreement or agreement < cfg.low_agreement_threshold) and
-        (not entropix_cfg.state_extras_interaction_strength or interaction_strength > cfg.low_interaction_strength_threshold)
+        and attn_vent > cfg.high_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
+        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
     ):
         sampler_state = SamplerState.EXPLORING
         temp_adj = cfg.low_entropy_interaction_strength_offset + cfg.low_entropy_interaction_strength_coefficient * interaction_strength
@@ -154,10 +155,10 @@ def sample(
         return sampled_token, sampler_state
 
     # High Entropy, High Varentropy: "resampling in the mist"
-    elif entropix_cfg.state_resampling and (
+    elif cfg.states["resampling"] and (
         ent > cfg.medium_logits_entropy_threshold and vent > cfg.high_logits_varentropy_threshold and attn_ent > cfg.high_attention_entropy_threshold
-        and attn_vent > cfg.high_attention_varentropy_threshold and (not entropix_cfg.state_extras_agreement or agreement > cfg.high_agreement_threshold) and
-        (not entropix_cfg.state_extras_interaction_strength or interaction_strength > cfg.high_interaction_strength_threshold)
+        and attn_vent > cfg.high_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement > cfg.high_agreement_threshold) and
+        (not cfg.states["interaction_strength"] or interaction_strength > cfg.high_interaction_strength_threshold)
     ):
         sampler_state = SamplerState.RESAMPLING
         # Use high temperature and adjusted top_p based on attention metrics

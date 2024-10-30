@@ -1,26 +1,35 @@
+import os
 import math
 from pathlib import Path
 from typing import Optional, Tuple, NamedTuple
 
+import jax.numpy as jnp
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelParams, XfmrWeights
+from entropix.tokenizer import Tokenizer
+from entropix.sampler import sample
+from entropix.stats import AttnStats
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-def load_weights(ckpt_dir: Path, n_layers: int, device: torch.device) -> XfmrWeights:
+################################################################################
+#                                   Weights                                    #
+################################################################################
+def load_weights(ckpt_dir: Path, n_layers: int) -> XfmrWeights:
     w = {}
     layer_weights = []
     with torch.inference_mode():
         for file in ckpt_dir.glob("*.npy"):
             name = '.'.join(str(file).split('/')[-1].split('.')[:-1])
-            # jax_weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
-            # np_weight = np.array(jax_weight).astype(np.float32)
-            np_weight = np.load(file=file, mmap_mode='r', allow_pickle=True).astype(np.float32)
+            jax_weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
+            np_weight = np.array(jax_weight).astype(np.float32)
             weight = torch.from_numpy(np_weight).to(torch.bfloat16).to(device)
             w[name] = weight.to(device)
         for i in range(n_layers):
@@ -40,6 +49,9 @@ def load_weights(ckpt_dir: Path, n_layers: int, device: torch.device) -> XfmrWei
         xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
         return xfmr_weights
 
+################################################################################
+#                                   KV Cache                                   #
+################################################################################
 class KVCache(nn.Module):
     def __init__(self, layers: int, bsz: int, max_seq_len: int, kv_heads: int, head_dim: int):
         super(KVCache, self).__init__()
@@ -93,6 +105,10 @@ class KVCache(nn.Module):
         self.k.zero_()
         self.v.zero_()
 
+
+################################################################################
+#                                 Attention                                    #
+################################################################################
 def rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
     return w * (x * torch.rsqrt(torch.pow(x, 2).mean(-1, keepdim=True) + eps))
 
@@ -149,40 +165,10 @@ def attention(
 def feed_forward(x: torch.Tensor, layer_weights: LayerWeights) -> torch.Tensor:
     return F.linear(F.silu(F.linear(x, layer_weights.w1)) * F.linear(x, layer_weights.w3), layer_weights.w2)
 
-class AttnStats(NamedTuple):
-    entropy: torch.Tensor  # (bsz, n_layers, num_heads)
-    varentropy: torch.Tensor  # (bsz, n_layers, num_heads)
-    n_layers: int
-    n_heads: int
 
-    @classmethod
-    def new(cls, bsz: int, n_layers: int, n_heads: int) -> 'AttnStats':
-        return cls(
-            entropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),
-            varentropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),
-            n_layers=n_layers,
-            n_heads=n_heads
-        )
-
-    @property
-    def avg_entropy(self):
-        return self.entropy.sum(dim=-1, keepdim=False)  # Average across heads
-
-    @property
-    def std_error(self):
-        return torch.sqrt(torch.mean(self.varentropy)) / (self.n_heads * self.n_layers)
-
-    def update(self, scores: torch.Tensor, layer_idx: int):
-        # scores shape: (bsz, n_heads, seqlen, n_words)
-        probs = torch.nn.functional.softmax(scores, dim=-1)
-        new_entropy = -torch.sum(torch.where(probs > 0, probs * torch.log(probs), torch.tensor(0.0)), dim=-1)
-        new_varentropy = torch.sum(probs * (torch.log(probs) + new_entropy.unsqueeze(-1))**2, dim=-1)
-
-        # Update entropy and varentropy tensors
-        self.entropy[:, layer_idx, :] = new_entropy
-        self.varentropy[:, layer_idx, :] = new_varentropy
-
-        return self
+################################################################################
+#                                 Transformer                                  #
+################################################################################
 
 def xfmr(
     xfmr_weights: XfmrWeights,
@@ -194,7 +180,7 @@ def xfmr(
     attn_mask: Optional[torch.Tensor] = None
 ) -> Tuple[torch.Tensor, KVCache, torch.Tensor, AttnStats]:
     h = xfmr_weights.tok_embeddings[tokens]
-    attn_stats = AttnStats.new(bsz=tokens.shape[0], n_layers=model_params.n_layers, n_heads=model_params.n_local_heads)
+    attn_stats = AttnStats.new(bsz=tokens.shape[0], n_layers=model_params.n_layers, n_heads=model_params.n_local_heads, device=device)
     for i in range(model_params.n_layers):
         norm_x = rms_norm(h, xfmr_weights.layer_weights[i].attention_norm)
         h_attn, kvcache, scores = attention(norm_x, xfmr_weights.layer_weights[i], model_params, cur_pos, i, freqs_cis, kvcache, attn_mask=attn_mask)
@@ -259,39 +245,111 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
         raise ValueError("seqlen <= 1")
     return mask
 
-def main():
-  with torch.inference_mode():
-    model_params = LLAMA_1B_PARAMS
-    xfmr_weights = load_weights()
+def generate(
+    xfmr_weights: XfmrWeights,
+    model_params: ModelParams,
+    tokenizer: Tokenizer,
+    prompt: str,
+    max_tokens: int = 8192,
+    stop_tokens: list | torch.Tensor | None = None,
+    temperature: float = 1.0,
+    stream: bool = True
+) -> str:
+    """
+    Generate text from a prompt using the transformer model.
 
-    tokenizer = Tokenizer('entropix/tokenizer.model')
-    raw_tokens1 = tokenizer.encode(prompt,  bos=False, eos=False, allowed_special='all')
-    #this is not used in this script, but can be used to generate base_raw_tokens1
-    base_raw_tokens1 = tokenizer.encode(bp1, bos=True, eos=False, allowed_special='all')
+    Args:
+        xfmr_weights: Model weights
+        model_params: Model parameters
+        tokenizer: Tokenizer instance
+        prompt: Input prompt text
+        max_tokens: Maximum number of tokens to generate
+        stop_tokens: List of token IDs to stop generation
+        temperature: Sampling temperature
+        stream: Whether to stream output token by token
 
+    Returns:
+        Generated text string
+    """
+    if not stop_tokens: stop_tokens = [128001, 128008, 128009]  # Default stop tokens
+    if isinstance(stop_tokens, list): stop_tokens = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
 
-    def generate(xfmr_weights, model_params, tokens):
-      gen_tokens = None
-      cur_pos = 0
-      tokens = torch.tensor([tokens], dtype=torch.long).to(device)
-      bsz, seqlen = tokens.shape
-      attn_mask = build_attn_mask(seqlen, cur_pos)
-      freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)
-      kvcache = KVCache.new(model_params.n_layers, bsz, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(DEVICE)
-      logits, kvcache, _, _ = xfmr(xfmr_weights, model_params, tokens, cur_pos, freqs_cis[:seqlen], kvcache, attn_mask=attn_mask)
-      next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-      gen_tokens = next_token
-      print(tokenizer.decode([next_token.item()]), end='', flush=True)
-      cur_pos = seqlen
-      stop = torch.tensor([128001, 128008, 128009], device=device, dtype=torch.int32)
-      while cur_pos < 8192:
-        cur_pos += 1
-        logits, kvcache, scores, stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos+1], kvcache)
-        next_token = sample(gen_tokens, logits, scores)
-        gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-        print(tokenizer.decode(next_token.tolist()[0]), end='', flush=True)
-        if torch.isin(next_token, stop).any():
-          break
+    with torch.inference_mode():
+        # Encode prompt
+        input_tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
+        tokens = torch.tensor([input_tokens], dtype=torch.long).to(device)
 
-    print(prompt)
-    generate(xfmr_weights, model_params, raw_tokens1)
+        # Initialize
+        bs, seqlen = tokens.shape
+        cur_pos = 0
+        generated_tokens = []
+        output_text = ""
+
+        # Setup attention mask and positional encodings
+        attn_mask = build_attn_mask(seqlen, cur_pos)
+        freqs_cis = precompute_freqs_cis(
+            model_params.head_dim,
+            model_params.max_seq_len,
+            model_params.rope_theta,
+            model_params.use_scaled_rope
+        )
+
+        # Initialize KV cache
+        kvcache = KVCache.new(
+            model_params.n_layers,
+            bs,
+            model_params.max_seq_len,
+            model_params.n_local_kv_heads,
+            model_params.head_dim
+        ).to(device)
+
+        # Initial forward pass
+        logits, kvcache, _, _ = xfmr(
+            xfmr_weights,
+            model_params,
+            tokens,
+            cur_pos,
+            freqs_cis[:seqlen],
+            kvcache,
+            attn_mask=attn_mask
+        )
+
+        # Get first token
+        next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
+        generated_tokens.append(next_token.item())
+
+        if stream:
+            token_text = tokenizer.decode([next_token.item()])
+            print(token_text, end='', flush=True)
+            output_text += token_text
+
+        cur_pos = seqlen
+        stop = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
+
+        # Generation loop
+        while cur_pos < max_tokens:
+            cur_pos += 1
+            logits, kvcache, scores, _ = xfmr(
+                xfmr_weights,
+                model_params,
+                next_token,
+                cur_pos,
+                freqs_cis[cur_pos:cur_pos+1],
+                kvcache
+            )
+
+            next_token = sample(generated_tokens, logits, scores, temperature)[0]
+            generated_tokens.append(next_token.item())
+
+            if stream:
+                token_text = tokenizer.decode([next_token.item()])
+                print(token_text, end='', flush=True)
+                output_text += token_text
+
+            if torch.isin(next_token, stop).any():
+                break
+
+        if not stream:
+            output_text = tokenizer.decode(generated_tokens)
+
+        return output_text
