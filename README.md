@@ -20,14 +20,9 @@ Supports `llama` and `smollm` models & easy to add more.
   ```bash
   uv pip install --project pyproject.toml .
   ```
-4. Download weights (Base and Instruct)
-  ```bash
-  python download_weights.py --model-id meta-llama/Llama-3.2-1B --out-dir weights/1B-Base
-  python download_weights.py --model-id meta-llama/Llama-3.2-1B-Instruct --out-dir weights/1B-Instruct
-  ```
 5. Run it
   ```bash
-  python main.py
+  python run.py
   ```
 
 ## About Entropix
