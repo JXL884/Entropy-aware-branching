@@ -41,7 +41,7 @@ for model_cfg in (LLAMA_1B, SMOLLM_360M):
     torch.set_float32_matmul_precision('high')
 
 
-    # download_weights(model_cfg)
+    download_weights(model_cfg)
     tokenizer = Tokenizer(tokenizer_path)
     prompt_templated = tokenizer.apply_chat_template(prompt)
     model = load_weights(weights_path, model_cfg)
