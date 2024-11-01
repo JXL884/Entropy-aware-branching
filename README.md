@@ -4,6 +4,8 @@
 
 Supports `llama` and `smollm` models & easy to add more.
 
+![image](https://github.com/user-attachments/assets/f19903ee-9a05-4062-8402-66241de5def0)
+
 ## Getting Started
 
 > Using [uv](https://docs.astral.sh/uv/getting-started/installation) for package management.
