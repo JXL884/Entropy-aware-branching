@@ -252,7 +252,7 @@ def generate(
             cur_pos += 1
             logits, kvcache, scores, _ = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos + 1], kvcache)
 
-            next_token = sample(gen_tokens, logits, scores, temperature)
+            next_token = sample(gen_tokens, logits, scores, temperature)[0]
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
             gen_tokens_list.append(next_token.item())
 
@@ -261,6 +261,7 @@ def generate(
                 print(token_text, end='', flush=True)
 
             if torch.isin(next_token, stop_tokens).any():
+                print("<|stop|>", end='', flush=True)
                 break
 
         output_text = tokenizer.decode(gen_tokens_list)

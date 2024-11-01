@@ -5,13 +5,7 @@ from typing import Tuple, Dict
 from entropix.stats import calculate_metrics
 from entropix.config import SamplerState, SamplerConfig, EntropixConfig
 
-# Device selection
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 def multinomial_sample_one(probs_sort: torch.Tensor, generator: torch.Generator | None) -> torch.Tensor:
     """Samples one token from a multinomial distribution with sorted probabilities."""
@@ -40,6 +34,7 @@ def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, 
     probs_sort = probs_sort * (1 - mask)
     probs_sort = probs_sort / torch.sum(probs_sort, dim=-1, keepdim=True)
     next_token = multinomial_sample_one(probs_sort, generator)
+    # Convert next_token to int64 before using it in gather
     next_token_g = torch.gather(probs_idx, -1, next_token.reshape(bsz, 1).to(torch.int64))
     return next_token_g.to(torch.int32)
 
