@@ -1,6 +1,6 @@
 # Entropix
 
-`pytorch` only refactor of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
+`pytorch` only refactor and API cleanup of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
 
 Supports `llama` and `smollm` models & easy to add more.
 
@@ -35,7 +35,8 @@ Supports `llama` and `smollm` models & easy to add more.
 > 
 > This project is a research project and a work in process. Its comprised of an inference stack, the sampler, and a UI (future). Please reach out to me on X if you have any question or concerns @_xjdr
 >
-> ![Entropy Quadrant](images/entropy_quadrants.png)
+> ![Entropy Quadrants](https://github.com/user-attachments/assets/ff6eac25-1510-4495-97c7-7ea620272da9)
+
 >
 > ### Ethos
 > 
