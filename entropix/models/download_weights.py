@@ -61,11 +61,21 @@ def fixed_get_imports(filename: str | Path) -> list[str]:
     imports.remove("flash_attn")
     return imports
 
-def download_weights(model_cfg: ModelConfig, out_dir: Path | str | None = None):
+def download_weights(
+    model_cfg: ModelConfig,
+    out_dir: Path | str | None = None,
+    download_tokenizer: bool = True,
+    tokenizer_out_path: Path | str | None = None,
+    tokenizer_url: str | None = None,
+    tokenizer_cfg_out_path: Path | str | None = None,
+    tokenizer_cfg_url: str | None = None
+):
+    skip_download = False
     if out_dir is None: out_dir = Path(f"weights/{model_cfg.name}")
     elif isinstance(out_dir, str): out_dir = Path(out_dir)
     if not out_dir.exists(): out_dir.mkdir(parents=True, exist_ok=True)
-    elif input(f"{out_dir} already exists. Overwrite? [y/N] ").lower() != "y": return
+    elif input(f"{out_dir} already exists. Overwrite? [y/N] ").lower() != "y": skip_download = True
+
 
     token = None
     t_paths_candidates = [Path.home() / '.hf_token', Path.home() / '.cache' / 'huggingface' / 'token']
@@ -74,24 +84,60 @@ def download_weights(model_cfg: ModelConfig, out_dir: Path | str | None = None):
             token = t_path.read_text().strip()
             break
 
-    with patch("transformers.dynamic_module_utils.get_imports", fixed_get_imports):
-        token = t_path.read_text().strip()
-        hf_model = AutoModelForCausalLM.from_pretrained(model_cfg.hf_id, torch_dtype=torch.bfloat16, offload_folder="/tmp/offload", token=token, device_map="cpu")
-        with torch.no_grad():
-            state_dict = hf_model.state_dict()
-            for hf_name, param in state_dict.items():
-                # print(f' {hf_name}: {param.shape=}')
-                name = translate_key(hf_name)
-                param.cpu()
-                if name.endswith('wq.weight'):
-                    param = reverse_permute(param, n_heads=model_cfg.n_local_heads, dim1=model_cfg.dim, dim2=model_cfg.dim)
-                elif name.endswith('wk.weight'):
-                    dim1 = model_cfg.head_dim * model_cfg.n_local_kv_heads
-                    dim2 = model_cfg.dim
-                    param = reverse_permute(param, n_heads=model_cfg.n_local_kv_heads, dim1=dim1, dim2=dim2)
-                else:
-                    pass
-                bf16_np_out = param.cpu().view(dtype=torch.uint16).numpy().view(ml_dtypes.bfloat16)
-                bf16_out = jnp.asarray(bf16_np_out, dtype=jnp.bfloat16).reshape(*param.shape)
-                print(f'Writing {hf_name} as {name} to {out_dir}/{name}.npy')
-                jnp.save(f'{out_dir}/{name}.npy', bf16_out)
+    if not skip_download:
+        with patch("transformers.dynamic_module_utils.get_imports", fixed_get_imports):
+            hf_model = AutoModelForCausalLM.from_pretrained(
+                model_cfg.hf_id, torch_dtype=torch.bfloat16, offload_folder="/tmp/offload", token=token, device_map="cpu"
+            )
+            with torch.no_grad():
+                state_dict = hf_model.state_dict()
+                for hf_name, param in state_dict.items():
+                    # print(f' {hf_name}: {param.shape=}')
+                    name = translate_key(hf_name)
+                    param.cpu()
+                    if name.endswith('wq.weight'):
+                        param = reverse_permute(param, n_heads=model_cfg.n_local_heads, dim1=model_cfg.dim, dim2=model_cfg.dim)
+                    elif name.endswith('wk.weight'):
+                        dim1 = model_cfg.head_dim * model_cfg.n_local_kv_heads
+                        dim2 = model_cfg.dim
+                        param = reverse_permute(param, n_heads=model_cfg.n_local_kv_heads, dim1=dim1, dim2=dim2)
+                    else:
+                        pass
+                    bf16_np_out = param.cpu().view(dtype=torch.uint16).numpy().view(ml_dtypes.bfloat16)
+                    bf16_out = jnp.asarray(bf16_np_out, dtype=jnp.bfloat16).reshape(*param.shape)
+                    print(f'Writing {hf_name} as {name} to {out_dir}/{name}.npy')
+                    jnp.save(f'{out_dir}/{name}.npy', bf16_out)
+
+    if download_tokenizer:
+        import requests
+
+        if tokenizer_out_path is None: tokenizer_out_path = Path(f"weights/tokenizers/{model_cfg.name}.json")
+        elif isinstance(tokenizer_out_path, str): tokenizer_out_path = Path(tokenizer_out_path)
+        if tokenizer_cfg_out_path is None: tokenizer_cfg_out_path = Path(f"weights/tokenizers/{model_cfg.name}_config.json")
+        elif isinstance(tokenizer_cfg_out_path, str): tokenizer_cfg_out_path = Path(tokenizer_cfg_out_path)
+
+        if not tokenizer_out_path.parent.exists(): tokenizer_out_path.parent.mkdir(parents=True, exist_ok=True)
+        if tokenizer_out_path.exists() and input(f"{tokenizer_out_path} already exists. Overwrite? [y/N] ").lower() != "y": return
+
+        if not tokenizer_url: tokenizer_url = f"https://huggingface.co/{model_cfg.hf_id}/resolve/main/tokenizer.json"
+        if not tokenizer_cfg_url: tokenizer_cfg_url = f"https://huggingface.co/{model_cfg.hf_id}/resolve/main/tokenizer_config.json"
+
+        print(f"Downloading tokenizer from {tokenizer_url} to {tokenizer_out_path}...")
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = requests.get(tokenizer_url, headers=headers)
+        if response.status_code == 200:
+            with open(tokenizer_out_path, 'wb') as f:
+                f.write(response.content)
+            print(f"Tokenizer downloaded to {tokenizer_out_path}")
+        else:
+            print(f"Failed to download tokenizer. Status code: {response.status_code}")
+
+        response = requests.get(tokenizer_cfg_url, headers=headers)
+        if response.status_code == 200:
+            with open(tokenizer_cfg_out_path, 'wb') as f:
+                f.write(response.content)
+            print(f"Tokenizer config downloaded to {tokenizer_cfg_out_path}")
+        else:
+            print(f"Failed to download tokenizer config. Status code: {response.status_code}")

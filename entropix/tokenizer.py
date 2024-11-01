@@ -1,186 +1,170 @@
 import os
-from logging import getLogger
-from pathlib import Path
+import json
 from typing import (
-  AbstractSet,
-  Collection,
-  Dict,
-  Iterator,
-  List,
-  Literal,
-  Optional,
-  Sequence,
-  Union,
-  cast,
+    AbstractSet,
+    Collection,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Union,
 )
 
-import tiktoken
-from tiktoken.load import load_tiktoken_bpe
+from transformers import PreTrainedTokenizerFast
 
-logger = getLogger(__name__)
-
-
-# The tiktoken tokenizer can handle <=400k chars without
-# pyo3_runtime.PanicException.
+# The following constants remain unchanged
 TIKTOKEN_MAX_ENCODE_CHARS = 400_000
-
-# https://github.com/openai/tiktoken/issues/195
-# Here we iterate over subsequences and split if we exceed the limit
-# of max consecutive non-whitespace or whitespace characters.
 MAX_NO_WHITESPACES_CHARS = 25_000
 
-
 class Tokenizer:
-  """
-  Tokenizing and encoding/decoding text using the Tiktoken tokenizer.
-  """
-
-  special_tokens: Dict[str, int]
-
-  num_reserved_special_tokens = 256
-
-  pat_str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"  # noqa: E501
-
-  def __init__(self, model_path: str):
     """
-    Initializes the Tokenizer with a Tiktoken model.
-
-    Args:
-        model_path (str): The path to the Tiktoken model file.
+    Tokenizing and encoding/decoding text using a tokenizer.json file.
     """
-    assert os.path.isfile(model_path), model_path
 
-    mergeable_ranks = load_tiktoken_bpe(model_path)
-    num_base_tokens = len(mergeable_ranks)
-    special_tokens = [
-      '<|begin_of_text|>',
-      '<|end_of_text|>',
-      '<|reserved_special_token_0|>',
-      '<|reserved_special_token_1|>',
-      '<|finetune_right_pad_id|>',
-      '<|step_id|>',
-      '<|start_header_id|>',
-      '<|end_header_id|>',
-      '<|eom_id|>',  # end of message
-      '<|eot_id|>',  # end of turn
-      '<|python_tag|>',
-    ]
-    reserved_tokens = [
-      f'<|reserved_special_token_{2 + i}|>'
-      for i in range(self.num_reserved_special_tokens - len(special_tokens))
-    ]
-    special_tokens = special_tokens + reserved_tokens
+    special_tokens: Dict[str, int]
+    num_reserved_special_tokens = 17
 
-    self.special_tokens = {token: num_base_tokens + i for i, token in enumerate(special_tokens)}
-    self.model = tiktoken.Encoding(
-      name=Path(model_path).name,
-      pat_str=self.pat_str,
-      mergeable_ranks=mergeable_ranks,
-      special_tokens=self.special_tokens,
-    )
+    def __init__(self, tokenizer_path: str, tokenizer_cfg_path: str | None = None):
+        """
+        Initializes the Tokenizer with a tokenizer.json file.
 
-    self.n_words: int = num_base_tokens + len(special_tokens)
-    # BOS / EOS token IDs
-    self.bos_id: int = self.special_tokens['<|begin_of_text|>']
-    self.eos_id: int = self.special_tokens['<|end_of_text|>']
-    self.eot_id: int = self.special_tokens['<|eot_id|>']
-    self.eom_id: int = self.special_tokens['<|eom_id|>']
-    self.python_tag_id = self.special_tokens['<|python_tag|>']
-    self.pad_id: int = self.special_tokens['<|finetune_right_pad_id|>']
-    self.stop_tokens = [
-      self.special_tokens['<|eom_id|>'],
-      self.special_tokens['<|eot_id|>'],
-    ]
+        Args:
+            tokenizer_path (str): The path to the tokenizer.json file.
+        """
+        assert os.path.isfile(tokenizer_path), tokenizer_path
 
-  def encode(
-    self,
-    s: str,
-    *,
-    bos: bool,
-    eos: bool,
-    allowed_special: Optional[Union[Literal['all'], AbstractSet[str]]] = None,
-    disallowed_special: Union[Literal['all'], Collection[str]] = (),
-  ) -> List[int]:
-    """
-    Encodes a string into a list of token IDs.
+        self.model = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
 
-    Args:
-        s (str): The input string to be encoded.
-        bos (bool): Whether to prepend the beginning-of-sequence token.
-        eos (bool): Whether to append the end-of-sequence token.
-        allowed_tokens ("all"|set[str]): allowed special tokens in string
-        disallowed_tokens ("all"|set[str]): special tokens that raise an error when in string
+        if tokenizer_cfg_path is None: tokenizer_cfg_path = f"{tokenizer_path[:-5]}_config.json"
 
-    Returns:
-        list[int]: A list of token IDs.
+        # Load special tokens from tokenizer config file and set up tokenizer
+        with open(tokenizer_cfg_path) as f:
+            cfg = json.load(f)
 
-    By default, setting disallowed_special=() encodes a string by ignoring
-    special tokens. Specifically:
-    - Setting `disallowed_special` to () will cause all text corresponding
-      to special tokens to be encoded as natural text (insteading of raising
-      an error).
-    - Setting `allowed_special` to "all" will treat all text corresponding
-      to special tokens to be encoded as special tokens.
-    """
-    if allowed_special is None:
-      allowed_special = set()
-    assert isinstance(s, str)
+        self.special_tokens = {token['content']: int(token_id) for token_id, token in cfg['added_tokens_decoder'].items()}
 
-    substrs = (
-      substr
-      for i in range(0, len(s), TIKTOKEN_MAX_ENCODE_CHARS)
-      for substr in self._split_whitespaces_or_nonwhitespaces(
-        s[i : i + TIKTOKEN_MAX_ENCODE_CHARS], MAX_NO_WHITESPACES_CHARS
-      )
-    )
-    t: List[int] = []
-    for substr in substrs:
-      t.extend(
-        self.model.encode(
-          substr,
-          allowed_special=allowed_special,
-          disallowed_special=disallowed_special,
+        self.n_words = self.model.vocab_size
+        self.bos_token = cfg["bos_token"]
+        self.bos_id = self.special_tokens[self.bos_token]
+        self.eos_token = cfg["eos_token"]
+        self.eos_id = self.special_tokens[self.eos_token]
+
+        # TODO: probably need a better way to infer/set eot and eom since neither are in llama/smollm tokenizer configs and they are different (indicitive of other tokenizers?)
+        self.eot_token = cfg["eot_token"] if "eot_token" in cfg else "<|eot_id|>" if "<|eot_id|>" in self.special_tokens else self.bos_token
+        self.eot_id = self.special_tokens[self.eot_token]
+        self.eom_token = cfg["eom_token"] if "eom_token" in cfg else "<|eom_id|>" if "<|eom_id|>" in self.special_tokens else self.eos_token
+        self.eom_id = self.special_tokens[self.eom_token]
+
+        self.stop_tokens = [self.eot_token, self.eom_token]
+        self.stop_token_ids = [self.eot_id, self.eom_id]
+
+        # TODO: same with these other special tokens not (always) defined in the configs
+        self.pad_token = cfg["pad_token"] if "pad_token" in cfg else "<|finetune_right_pad_id|>" if "<|finetune_right_pad_id|>" in self.special_tokens else self.eos_token
+        self.pad_id = self.special_tokens[self.pad_token]
+        self.python_tag_token = cfg["python_tag"] if "python_tag" in cfg else "<|python_tag|>" if "<|python_tag|>" in self.special_tokens else "<jupyter_code>" if "<jupyter_code>" in self.special_tokens else ""
+        self.python_tag_id = self.special_tokens[self.python_tag_token] if self.python_tag_token else None
+
+        self.chat_template = cfg["chat_template"] if "chat_template" in cfg else None
+
+        # FIX: and these seem to never be defined?
+        self.start_header_token = cfg["start_header_token"] if "start_header_token" in cfg else "<|start_header_id|>" if "<|start_header_id|>" in self.special_tokens else ""
+        self.start_header_id = self.special_tokens[self.start_header_token] if self.start_header_token else None
+        self.end_header_token = cfg["end_header_token"] if "end_header_token" in cfg else "<|end_header_id|>" if "<|end_header_id|>" in self.special_tokens else ""
+        self.end_header_id = self.special_tokens[self.end_header_token] if self.end_header_token else None
+
+
+    def encode(
+        self,
+        s: str,
+        *,
+        bos: bool,
+        eos: bool,
+        allowed_special: Optional[Union[Literal['all'], AbstractSet[str]]] = None,
+        disallowed_special: Union[Literal['all'], Collection[str]] = (),
+    ) -> List[int]:
+        """
+        Encodes a string into a list of token IDs.
+
+        Args:
+            s (str): The input string to be encoded.
+            bos (bool): Whether to prepend the beginning-of-sequence token.
+            eos (bool): Whether to append the end-of-sequence token.
+            allowed_special ("all"|set[str]): allowed special tokens in string
+            disallowed_special ("all"|set[str]): special tokens that raise an error when in string
+
+        Returns:
+            list[int]: A list of token IDs.
+        """
+        if allowed_special is None:
+            allowed_special = set()
+        assert isinstance(s, str)
+
+        substrs = (
+            substr for i in range(0, len(s), TIKTOKEN_MAX_ENCODE_CHARS)
+            for substr in self._split_whitespaces_or_nonwhitespaces(s[i:i + TIKTOKEN_MAX_ENCODE_CHARS], MAX_NO_WHITESPACES_CHARS)
         )
-      )
-    if bos:
-      t.insert(0, self.bos_id)
-    if eos:
-      t.append(self.eos_id)
-    return t
+        t: List[int] = []
+        for substr in substrs:
+            t.extend(self.model.encode(substr, add_special_tokens=False))
+        if bos:
+            t.insert(0, self.bos_id)
+        if eos:
+            t.append(self.eos_id)
+        return t
 
-  def decode(self, t: Sequence[int]) -> str:
-    """
-    Decodes a list of token IDs into a string.
+    def decode(self, t: Sequence[int]) -> str:
+        """
+        Decodes a list of token IDs into a string.
 
-    Args:
-        t (List[int]): The list of token IDs to be decoded.
+        Args:
+            t (List[int]): The list of token IDs to be decoded.
 
-    Returns:
-        str: The decoded string.
-    """
-    # Typecast is safe here. Tiktoken doesn't do anything list-related with the sequence.
-    return self.model.decode(cast(List[int], t))
+        Returns:
+            str: The decoded string.
+        """
+        return self.model.decode(t)
 
-  @staticmethod
-  def _split_whitespaces_or_nonwhitespaces(s: str, max_consecutive_slice_len: int) -> Iterator[str]:
-    """
-    Splits the string `s` so that each substring contains no more than `max_consecutive_slice_len`
-    consecutive whitespaces or consecutive non-whitespaces.
-    """
-    current_slice_len = 0
-    current_slice_is_space = s[0].isspace() if len(s) > 0 else False
-    slice_start = 0
+    def apply_chat_template(self, messages: list[dict[str, str]] | str) -> str:
+        if isinstance(messages, str): messages = [{"role": "user", "content": messages}]
+        if self.chat_template:
+            from jinja2 import Template
+            template = Template(self.chat_template)
+            return template.render(messages=messages, add_generation_prompt=True)
+        else:
+            """
+            assume and apply the following format:
 
-    for i in range(len(s)):
-      is_now_space = s[i].isspace()
+            <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+            Which number is larger, 9.9 or 9.11?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+            """
+            out = f"{self.bos_token}"
+            for message in messages:
+                out += f"{self.start_header_token}{message['role']}{self.end_header_token}\n{message['content']}{self.eot_token}"
+            out += f"{self.start_header_token}assistant{self.end_header_token}\n"
+            return out
 
-      if current_slice_is_space ^ is_now_space:
-        current_slice_len = 1
-        current_slice_is_space = is_now_space
-      else:
-        current_slice_len += 1
-        if current_slice_len > max_consecutive_slice_len:
-          yield s[slice_start:i]
-          slice_start = i
-          current_slice_len = 1
-    yield s[slice_start:]
+    @staticmethod
+    def _split_whitespaces_or_nonwhitespaces(s: str, max_consecutive_slice_len: int) -> Iterator[str]:
+        """
+        Splits the string `s` so that each substring contains no more than `max_consecutive_slice_len`
+        consecutive whitespaces or consecutive non-whitespaces.
+        """
+        current_slice_len = 0
+        current_slice_is_space = s[0].isspace() if len(s) > 0 else False
+        slice_start = 0
+
+        for i in range(len(s)):
+            is_now_space = s[i].isspace()
+
+            if current_slice_is_space ^ is_now_space:
+                current_slice_len = 1
+                current_slice_is_space = is_now_space
+            else:
+                current_slice_len += 1
+                if current_slice_len > max_consecutive_slice_len:
+                    yield s[slice_start:i]
+                    slice_start = i
+                    current_slice_len = 1
+        yield s[slice_start:]

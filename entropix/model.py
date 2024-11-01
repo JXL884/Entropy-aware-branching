@@ -196,7 +196,6 @@ def generate(
     tokenizer: Tokenizer,
     prompt: str,
     max_tokens: int = 8192,
-    stop_tokens: list | torch.Tensor | None = None,
     temperature: float = 1.0,
     stream: bool = True
 ) -> str:
@@ -216,8 +215,7 @@ def generate(
     Returns:
         Generated text string
     """
-    if not stop_tokens: stop_tokens = [128001, 128008, 128009]  # Default stop tokens
-    if isinstance(stop_tokens, list): stop_tokens = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
+    stop_tokens = torch.tensor(tokenizer.stop_token_ids, device=device, dtype=torch.int32)
 
     with torch.inference_mode():
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
