@@ -16,10 +16,6 @@ for model_cfg in (LLAMA_1B, SMOLLM_360M):
     weights_path = f"weights/{model_cfg.name}"
     tokenizer_path = f"weights/tokenizers/{model_cfg.name}.json"
 
-    torch.cuda.empty_cache()
-    torch.set_float32_matmul_precision('high')
-
-
     download_weights(model_cfg)
     tokenizer = Tokenizer(tokenizer_path)
     prompt_templated = tokenizer.apply_chat_template(prompt)
