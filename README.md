@@ -1,6 +1,8 @@
-# entropix
+# Entropix
 
-Opinionated pytorch only refactor of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
+`pytorch` only refactor of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
+
+Supports `llama` and `smollm` models & easy to add more.
 
 ## Getting Started
 
@@ -28,7 +30,7 @@ Opinionated pytorch only refactor of [xjdr's entropix project](https://github.co
   python main.py
   ```
 
-## entropix
+## About Entropix
 
 > Entropy Based Sampling and Parallel CoT Decoding
 > 

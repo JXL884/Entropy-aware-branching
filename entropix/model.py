@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelParams, XfmrWeights
+from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelConfig, XfmrWeights
 from entropix.tokenizer import Tokenizer
 from entropix.sampler import sample
 from entropix.stats import AttnStats
@@ -23,7 +23,8 @@ print(f"Using device: {device}")
 ################################################################################
 #                                   Weights                                    #
 ################################################################################
-def load_weights(ckpt_dir: Path, n_layers: int) -> XfmrWeights:
+def load_weights(ckpt_dir: Path | str, model_cfg: ModelConfig) -> XfmrWeights:
+    if isinstance(ckpt_dir, str): ckpt_dir = Path(ckpt_dir)
     w = {}
     layer_weights = []
     with torch.inference_mode():
@@ -33,7 +34,7 @@ def load_weights(ckpt_dir: Path, n_layers: int) -> XfmrWeights:
             np_weight = np.array(jax_weight).astype(np.float32)
             weight = torch.from_numpy(np_weight).to(torch.bfloat16).to(device)
             w[name] = weight.to(device)
-        for i in range(n_layers):
+        for i in range(model_cfg.n_layers):
             layer_weights.append(
                 LayerWeights(
                     wq=w[f'layers.{i}.attention.wq.weight'],
@@ -115,7 +116,7 @@ def feed_forward(x: torch.Tensor, layer_weights: LayerWeights) -> torch.Tensor:
 
 def xfmr(
     xfmr_weights: XfmrWeights,
-    model_params: ModelParams,
+    model_params: ModelConfig,
     tokens: torch.Tensor,
     cur_pos: int,
     freqs_cis: torch.Tensor,
@@ -190,7 +191,7 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
 
 def generate(
     xfmr_weights: XfmrWeights,
-    model_params: ModelParams,
+    model_params: ModelConfig,
     tokenizer: Tokenizer,
     prompt: str,
     max_tokens: int = 8192,

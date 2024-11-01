@@ -1,7 +1,10 @@
-from pathlib import Path
-from entropix.llama import LLAMA_1B_PARAMS
+from entropix.models import LLAMA_1B, SMOLLM_360M
 from entropix.model import load_weights, generate
 from entropix.tokenizer import Tokenizer
+import torch
+
+torch.cuda.empty_cache()
+torch.set_float32_matmul_precision('high')
 
 prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 <antThinking>
@@ -13,5 +16,5 @@ Which number is larger, 9.9 or 9.11?<|eot_id|><|start_header_id|>assistant<|end_
 print(prompt)
 
 tokenizer = Tokenizer("entropix/tokenizer.model")
-model = load_weights(Path("./weights/1B-Instruct"), LLAMA_1B_PARAMS.n_layers)
-generate(model, LLAMA_1B_PARAMS, tokenizer, prompt, max_tokens=1024)
+model = load_weights("weights/1B-Instruct", LLAMA_1B.n_layers)
+generate(model, LLAMA_1B, tokenizer, prompt, max_tokens=1024)

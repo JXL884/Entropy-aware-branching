@@ -62,7 +62,8 @@ class EntropixConfig:
 #     "max_seq_len": 2048,  # Inferred from "max_position_embeddings"
 # }
 
-class ModelParams(NamedTuple):
+class ModelConfig(NamedTuple):
+    name: str
     n_layers: int
     n_local_heads: int
     n_local_kv_heads: int
@@ -70,6 +71,7 @@ class ModelParams(NamedTuple):
     max_seq_len: int
     rope_theta: float
     use_scaled_rope: bool
+    hf_id: str | None = None
 
 class LayerWeights(NamedTuple):
     wq: torch.Tensor
