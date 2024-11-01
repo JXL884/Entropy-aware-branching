@@ -1,6 +1,6 @@
-# fintropix
+# entropix
 
-Research project based on [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) of [xjdr's entropix project](https://github.com/xjdr-alt/entropix) using entropy-based sampling to improve financial reasoning, problem decomposition, and human-AI collaboration.
+Opinionated pytorch only refactor of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
 
 ## Getting Started
 
