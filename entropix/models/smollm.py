@@ -8,8 +8,8 @@ _smollm_360m_params = {
     "vocab_size": 49152,
     "norm_eps": 1e-05,
     "rope_theta": 10000.0,
-    "use_scaled_rope": False,  # Inferred from "rope_scaling": null
-    "max_seq_len": 2048,  # Inferred from "max_position_embeddings"
+    "use_scaled_rope": False,
+    "max_seq_len": 2048,
 }
 
 SMOLLM_360M = ModelConfig(
