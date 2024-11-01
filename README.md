@@ -27,6 +27,8 @@ Supports `llama` and `smollm` models & easy to add more.
   python run.py
   ```
 
+_There's also my `shell.nix` if you're a fellow nix enjoyer. You'll have to change the venv bits in the `shellHook` for yourself though._
+
 ## About Entropix
 
 > Entropy Based Sampling and Parallel CoT Decoding
