@@ -13,6 +13,7 @@ from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelParams, XfmrW
 from entropix.tokenizer import Tokenizer
 from entropix.sampler import sample
 from entropix.stats import AttnStats
+from entropix.kvcache import KVCache
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -48,63 +49,6 @@ def load_weights(ckpt_dir: Path, n_layers: int) -> XfmrWeights:
             )
         xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
         return xfmr_weights
-
-################################################################################
-#                                   KV Cache                                   #
-################################################################################
-class KVCache(nn.Module):
-    def __init__(self, layers: int, bsz: int, max_seq_len: int, kv_heads: int, head_dim: int):
-        super(KVCache, self).__init__()
-        # Initialize k and v as buffers to ensure they're part of the module state
-        self.register_buffer('k', torch.zeros((layers, bsz, max_seq_len, kv_heads, head_dim), dtype=torch.bfloat16, device=device))
-        self.register_buffer('v', torch.zeros((layers, bsz, max_seq_len, kv_heads, head_dim), dtype=torch.bfloat16, device=device))
-
-    @classmethod
-    def new(cls, layers: int, bsz: int, max_seq_len: int, kv_heads: int, head_dim: int) -> 'KVCache':
-        """Creates a new KVCache instance with initialized k and v tensors."""
-        return cls(layers, bsz, max_seq_len, kv_heads, head_dim)
-
-    def update(self, xk: torch.Tensor, xv: torch.Tensor, layer_idx: int, cur_pos: int, n_rep: int):
-        """
-        Updates the cache with new key and value tensors.
-
-        Args:
-            xk (torch.Tensor): New key tensor to insert. Shape should align with (bsz, insert_len, kv_heads, head_dim).
-            xv (torch.Tensor): New value tensor to insert. Shape should align with (bsz, insert_len, kv_heads, head_dim).
-            layer_idx (int): The index of the layer to update.
-            cur_pos (int): The current position in the sequence to start inserting.
-            n_rep (int): The number of times to repeat the keys and values along the sequence dimension.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                - keys: Updated or repeated keys tensor.
-                - values: Updated or repeated values tensor.
-        """
-        # Ensure xk and xv have the correct device and dtype
-        xk = xk.to(self.k.dtype)
-        xv = xv.to(self.v.dtype)
-
-        # Update the k and v tensors in the specified layer and position
-        insert_len = xk.size(1)  # Assuming xk shape is (bsz, insert_len, kv_heads, head_dim)
-        self.k[layer_idx, :, cur_pos:cur_pos + insert_len, :, :] = xk
-        self.v[layer_idx, :, cur_pos:cur_pos + insert_len, :, :] = xv
-
-        if cur_pos == 0:
-            # If inserting at the beginning, repeat the new keys and values
-            keys = xk.repeat_interleave(n_rep, dim=2)
-            values = xv.repeat_interleave(n_rep, dim=2)
-        else:
-            # Otherwise, repeat the existing keys and values from the cache
-            keys = self.k[layer_idx].repeat_interleave(n_rep, dim=2)
-            values = self.v[layer_idx].repeat_interleave(n_rep, dim=2)
-
-        return keys, values, self
-
-    def clear(self):
-        """Resets the k and v caches to zeros."""
-        self.k.zero_()
-        self.v.zero_()
-
 
 ################################################################################
 #                                 Attention                                    #
@@ -164,7 +108,6 @@ def attention(
 
 def feed_forward(x: torch.Tensor, layer_weights: LayerWeights) -> torch.Tensor:
     return F.linear(F.silu(F.linear(x, layer_weights.w1)) * F.linear(x, layer_weights.w3), layer_weights.w2)
-
 
 ################################################################################
 #                                 Transformer                                  #
@@ -275,81 +218,51 @@ def generate(
     if isinstance(stop_tokens, list): stop_tokens = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
 
     with torch.inference_mode():
-        # Encode prompt
-        input_tokens = tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')
-        tokens = torch.tensor([input_tokens], dtype=torch.long).to(device)
+        print("encoding prompt...")
+        tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
 
         # Initialize
-        bs, seqlen = tokens.shape
+        gen_tokens = None
+        gen_tokens_list = []
         cur_pos = 0
-        generated_tokens = []
-        output_text = ""
+        bs, seqlen = tokens.shape
 
+        print("initializing model...")
         # Setup attention mask and positional encodings
         attn_mask = build_attn_mask(seqlen, cur_pos)
-        freqs_cis = precompute_freqs_cis(
-            model_params.head_dim,
-            model_params.max_seq_len,
-            model_params.rope_theta,
-            model_params.use_scaled_rope
-        )
+        freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)
 
         # Initialize KV cache
-        kvcache = KVCache.new(
-            model_params.n_layers,
-            bs,
-            model_params.max_seq_len,
-            model_params.n_local_kv_heads,
-            model_params.head_dim
-        ).to(device)
+        kvcache = KVCache.new(model_params.n_layers, bs, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(device)
 
         # Initial forward pass
-        logits, kvcache, _, _ = xfmr(
-            xfmr_weights,
-            model_params,
-            tokens,
-            cur_pos,
-            freqs_cis[:seqlen],
-            kvcache,
-            attn_mask=attn_mask
-        )
-
-        # Get first token
+        logits, kvcache, _, _ = xfmr(xfmr_weights, model_params, tokens, cur_pos, freqs_cis[:seqlen], kvcache, attn_mask=attn_mask)
         next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-        generated_tokens.append(next_token.item())
+        gen_tokens = next_token
+        gen_tokens_list.append(next_token.item())
 
         if stream:
-            token_text = tokenizer.decode([next_token.item()])
+            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
             print(token_text, end='', flush=True)
-            output_text += token_text
 
         cur_pos = seqlen
-        stop = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
 
         # Generation loop
         while cur_pos < max_tokens:
             cur_pos += 1
-            logits, kvcache, scores, _ = xfmr(
-                xfmr_weights,
-                model_params,
-                next_token,
-                cur_pos,
-                freqs_cis[cur_pos:cur_pos+1],
-                kvcache
-            )
+            logits, kvcache, scores, _ = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos + 1], kvcache)
 
-            next_token = sample(generated_tokens, logits, scores, temperature)[0]
-            generated_tokens.append(next_token.item())
+            next_token = sample(gen_tokens, logits, scores, temperature)
+            gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+            gen_tokens_list.append(next_token.item())
 
             if stream:
-                token_text = tokenizer.decode([next_token.item()])
+                token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
                 print(token_text, end='', flush=True)
-                output_text += token_text
 
-            if torch.isin(next_token, stop).any():
+            if torch.isin(next_token, stop_tokens).any():
                 break
 
-        if not stream:
-            output_text = tokenizer.decode(generated_tokens)
+        output_text = tokenizer.decode(gen_tokens_list)
 
         return output_text
