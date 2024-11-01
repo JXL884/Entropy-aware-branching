@@ -1,8 +1,7 @@
-import torch
-from typing import NamedTuple
+from dataclasses import dataclass, field
 from enum import Enum
-from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, NamedTuple, Optional
+import torch
 
 DEFAULT_MASK_VALUE = -0.7 * float(torch.finfo(torch.float32).max)
 
@@ -40,30 +39,10 @@ class CLIConfig:
             if self.max_tokens < 1 or self.max_tokens > 2048:
                 raise ValueError("max_tokens must be between 1 and 2048")
 
-
-class EntropixConfig:
-    def __init__(self):
-        # Sampler state toggles
-
-        # Adaptive state dynamic top_p, top_k, min_p adjustment toggles (old)
-        '''self.state_dynamic_top_p = True
-        self.state_dynamic_top_k = True
-        self.state_dynamic_min_p = True'''
-
-# params = {
-#     "dim": 960,
-#     "n_layers": 32,
-#     "n_heads": 15,
-#     "n_kv_heads": 5,
-#     "vocab_size": 49152,
-#     "norm_eps": 1e-05,
-#     "rope_theta": 10000.0,
-#     "use_scaled_rope": False,  # Inferred from "rope_scaling": null
-#     "max_seq_len": 2048,  # Inferred from "max_position_embeddings"
-# }
-
-class ModelConfig(NamedTuple):
+@dataclass
+class ModelConfig:
     name: str
+    dim: int
     n_layers: int
     n_local_heads: int
     n_local_kv_heads: int

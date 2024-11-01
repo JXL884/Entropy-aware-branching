@@ -16,6 +16,8 @@ _llama_params = {
 
 LLAMA_1B = ModelConfig(
     name="llama-1b",
+    hf_id="meta-llama/Llama-3.2-1B-Instruct",
+    dim=_llama_params["dim"],
     n_layers=_llama_params["n_layers"],
     n_local_heads=_llama_params["n_heads"],
     n_local_kv_heads=_llama_params["n_kv_heads"],

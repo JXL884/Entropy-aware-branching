@@ -1,4 +1,4 @@
-from entropix.models import LLAMA_1B, SMOLLM_360M
+from entropix.models import LLAMA_1B, SMOLLM_360M, download_weights
 from entropix.model import load_weights, generate
 from entropix.tokenizer import Tokenizer
 import torch
@@ -13,8 +13,9 @@ You're absolutely right. I need to delve deeper into my actual thought processes
 
 Which number is larger, 9.9 or 9.11?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
-print(prompt)
 
 tokenizer = Tokenizer("entropix/tokenizer.model")
-model = load_weights("weights/1B-Instruct", LLAMA_1B.n_layers)
+download_weights(LLAMA_1B)
+model = load_weights("weights/llama-1b", LLAMA_1B)
+print(prompt)
 generate(model, LLAMA_1B, tokenizer, prompt, max_tokens=1024)

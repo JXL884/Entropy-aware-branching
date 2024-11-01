@@ -24,6 +24,7 @@ print(f"Using device: {device}")
 #                                   Weights                                    #
 ################################################################################
 def load_weights(ckpt_dir: Path | str, model_cfg: ModelConfig) -> XfmrWeights:
+    print(f"Loading weights from {ckpt_dir}...")
     if isinstance(ckpt_dir, str): ckpt_dir = Path(ckpt_dir)
     w = {}
     layer_weights = []
@@ -219,7 +220,6 @@ def generate(
     if isinstance(stop_tokens, list): stop_tokens = torch.tensor(stop_tokens, device=device, dtype=torch.int32)
 
     with torch.inference_mode():
-        print("encoding prompt...")
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
 
         # Initialize
@@ -228,7 +228,6 @@ def generate(
         cur_pos = 0
         bs, seqlen = tokens.shape
 
-        print("initializing model...")
         # Setup attention mask and positional encodings
         attn_mask = build_attn_mask(seqlen, cur_pos)
         freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)

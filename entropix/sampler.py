@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
-from typing import Tuple, Dict
+from typing import Tuple
 
 from entropix.stats import calculate_metrics
-from entropix.config import SamplerState, SamplerConfig, EntropixConfig
+from entropix.config import SamplerState, SamplerConfig
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
