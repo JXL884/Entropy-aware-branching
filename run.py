@@ -5,15 +5,16 @@ from entropix.tokenizer import Tokenizer
 from entropix.plot import plot_entropy, plot_sampler
 
 prompt = "Which number is larger, 9.9 or 9.11?"
-# sampler_cfg = SamplerConfig()  # using the default sampler thresholds, can specify inline to change
+sampler_cfg = SamplerConfig()  # using the default sampler thresholds, can specify inline to change
 # e.g. to use all defaults except logit entropy thresholds
-sampler_cfg = SamplerConfig(
-    low_logits_entropy_threshold=0.3,
-    medium_logits_entropy_threshold=1.0,
-    high_logits_entropy_threshold=2.0,
-)
+# sampler_cfg = SamplerConfig(
+#     low_logits_entropy_threshold=0.3,
+#     medium_logits_entropy_threshold=1.0,
+#     high_logits_entropy_threshold=2.0,
+# )
 
 for model_params in (LLAMA_1B, SMOLLM_360M):
+    print()
     print("=" * 80)
     print(model_params.name)
     print("=" * 80)

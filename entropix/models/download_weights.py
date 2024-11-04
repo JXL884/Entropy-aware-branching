@@ -74,7 +74,7 @@ def download_weights(
     if out_dir is None: out_dir = Path(f"weights/{model_cfg.name}")
     elif isinstance(out_dir, str): out_dir = Path(out_dir)
     if not out_dir.exists(): out_dir.mkdir(parents=True, exist_ok=True)
-    elif input(f"{out_dir} already exists. Overwrite? [y/N] ").lower() != "y": skip_download = True
+    elif input(f"{out_dir} already exists. Re-download? [y/N] ").lower() != "y": skip_download = True
 
 
     token = None
