@@ -236,6 +236,7 @@ def generate(
         kvcache = KVCache.new(model_params.n_layers, bs, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(device)
 
         # Generation loop
+        output = ""
         next_token = tokens
         freqs_end = seqlen
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
@@ -255,25 +256,9 @@ def generate(
             gen_tokens_list.append(next_token.item())
 
             if torch.isin(next_token, stop_tokens).any(): break
-            elif print_stream:
-                token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                print(token_text, end='', flush=True)
 
+            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
+            output += token_text
+            if print_stream: print(token_text, end='', flush=True)
 
-            # cur_pos += 1
-            # logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos + 1], kvcache)
-            #
-            # next_token = sample(gen_tokens, logits, scores, temperature)[0]
-            # gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-            # gen_tokens_list.append(next_token.item())
-            #
-            # if print_stream:
-            #     token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
-            #     print(token_text, end='', flush=True)
-            #
-            # if torch.isin(next_token, stop_tokens).any():
-            #     break
-
-        output_text = tokenizer.decode(gen_tokens_list)
-
-        return output_text
+        return output
