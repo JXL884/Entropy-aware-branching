@@ -1,4 +1,4 @@
-from entropix.config import ModelConfig
+from entropix.model import ModelParams
 
 _llama_params = {
     "dim": 2048,
@@ -14,7 +14,7 @@ _llama_params = {
     "max_seq_len": 4096,
 }
 
-LLAMA_1B = ModelConfig(
+LLAMA_1B = ModelParams(
     name="llama-1b",
     hf_id="meta-llama/Llama-3.2-1B-Instruct",
     dim=_llama_params["dim"],

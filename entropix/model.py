@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelConfig, SamplerConfig, SamplerState, XfmrWeights
+from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState
 from entropix.tokenizer import Tokenizer
 from entropix.sampler import sample
 from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
@@ -23,9 +23,54 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if 
 print(f"Using device: {device}")
 
 ################################################################################
+#                                    Types                                     #
+################################################################################
+
+class LayerWeights(NamedTuple):
+    wq: torch.Tensor
+    wk: torch.Tensor
+    wv: torch.Tensor
+    wo: torch.Tensor
+    w1: torch.Tensor
+    w2: torch.Tensor
+    w3: torch.Tensor
+    ffn_norm: torch.Tensor
+    attention_norm: torch.Tensor
+
+class XfmrWeights(NamedTuple):
+    tok_embeddings: torch.Tensor
+    norm: torch.Tensor
+    output: torch.Tensor
+    layer_weights: list[LayerWeights]
+
+class ModelParams(NamedTuple):
+    name: str
+    dim: int
+    n_layers: int
+    n_local_heads: int
+    n_local_kv_heads: int
+    head_dim: int
+    max_seq_len: int
+    rope_theta: float
+    use_scaled_rope: bool
+    hf_id: str | None = None
+
+class Model(NamedTuple):
+    weights: XfmrWeights
+    params: ModelParams
+    tokenizer: Tokenizer
+
+class Generation(NamedTuple):
+    prompt: str
+    response: str
+    tokens: list[str]
+    metrics: list[TokenMetrics]
+    sampler_states: list[SamplerState]
+
+################################################################################
 #                                   Weights                                    #
 ################################################################################
-def load_weights(ckpt_dir: Path | str, model_cfg: ModelConfig) -> XfmrWeights:
+def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
     print(f"Loading weights from {ckpt_dir}...")
     if isinstance(ckpt_dir, str): ckpt_dir = Path(ckpt_dir)
     w = {}
@@ -119,7 +164,7 @@ def feed_forward(x: torch.Tensor, layer_weights: LayerWeights) -> torch.Tensor:
 
 def xfmr(
     xfmr_weights: XfmrWeights,
-    model_params: ModelConfig,
+    model_params: ModelParams,
     tokens: torch.Tensor,
     cur_pos: int,
     freqs_cis: torch.Tensor,
@@ -192,19 +237,9 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
         raise ValueError("seqlen <= 1")
     return mask
 
-@dataclass
-class Generation:
-    prompt: str
-    response: str
-    tokens: list[str]
-    metrics: list[TokenMetrics]
-    sampler_states: list[SamplerState]
-
 def generate(
-    xfmr_weights: XfmrWeights,
-    model_params: ModelConfig,
-    tokenizer: Tokenizer,
     prompt: str,
+    model: Model,
     max_tokens: int | None = None,
     temperature: float = 1.0,
     print_stream: bool = False,
@@ -215,31 +250,26 @@ def generate(
     Generate text from a prompt using the transformer model.
 
     Args:
-        xfmr_weights: Model weights
-        model_params: Model parameters
-        tokenizer: Tokenizer instance
-        prompt: Input prompt text
-        max_tokens: Maximum number of tokens to generate
-        stop_tokens: List of token IDs to stop generation
-        temperature: Sampling temperature
-        stream: Whether to stream output token by token
+        prompt: Input prompt
+        model: Model to use for generation
+        tokenizer: Tokenizer to use for tokenization
 
     Returns:
         Generated text string
     """
-    stop_tokens = torch.tensor(tokenizer.stop_token_ids, device=device, dtype=torch.int32)
-    if max_tokens is None: max_tokens = model_params.max_seq_len
+    stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
+    if max_tokens is None: max_tokens = model.params.max_seq_len
     if sampler_cfg is None: sampler_cfg = SamplerConfig()
 
     with torch.inference_mode():
-        tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
+        tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
         response = ""
         bs, seqlen = tokens.shape
         cur_pos = 0
 
         attn_mask = build_attn_mask(seqlen, cur_pos)
-        freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)
-        kvcache = KVCache.new(model_params.n_layers, bs, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(device)
+        freqs_cis = precompute_freqs_cis(model.params.head_dim, model.params.max_seq_len, model.params.rope_theta, model.params.use_scaled_rope)
+        kvcache = KVCache.new(model.params.n_layers, bs, model.params.max_seq_len, model.params.n_local_kv_heads, model.params.head_dim).to(device)
 
         next_token = tokens
         freqs_end = seqlen
@@ -251,7 +281,7 @@ def generate(
         # Generation loop
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
-            logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
+            logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
             next_token, sampler_state = sample(gen_tokens, logits, scores, temperature, sampler_cfg)
 
             if metrics:
@@ -263,7 +293,7 @@ def generate(
 
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
 
-            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
+            token_text = model.tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
             gen_tokens_text.append(token_text)
 
             # break after adding the stop token and its metrics to output but before adding to response text / printing
@@ -271,5 +301,6 @@ def generate(
 
             if print_stream: print(token_text, end='', flush=True)
             response += token_text
+        if print_stream: print()
 
         return Generation(prompt=prompt, response=response, tokens=gen_tokens_text, metrics=gen_metrics, sampler_states=sampler_states)

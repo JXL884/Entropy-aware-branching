@@ -1,4 +1,4 @@
-from entropix.config import ModelConfig
+from entropix.model import ModelParams
 
 _smollm_360m_params = {
     "dim": 960,
@@ -12,7 +12,7 @@ _smollm_360m_params = {
     "max_seq_len": 2048,
 }
 
-SMOLLM_360M = ModelConfig(
+SMOLLM_360M = ModelParams(
     name="SmolLM2-360m",
     hf_id="HuggingFaceTB/SmolLM2-360M-Instruct",
     dim=_smollm_360m_params["dim"],

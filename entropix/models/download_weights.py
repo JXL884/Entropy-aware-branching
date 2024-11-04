@@ -7,7 +7,7 @@ from transformers import AutoModelForCausalLM
 from unittest.mock import patch
 from transformers.dynamic_module_utils import get_imports
 
-from entropix.config import ModelConfig
+from entropix.model import ModelParams
 
 def translate_key(in_key: str):
     out_key = in_key.replace('.weight', '')
@@ -62,7 +62,7 @@ def fixed_get_imports(filename: str | Path) -> list[str]:
     return imports
 
 def download_weights(
-    model_cfg: ModelConfig,
+    model_cfg: ModelParams,
     out_dir: Path | str | None = None,
     download_tokenizer: bool = True,
     tokenizer_out_path: Path | str | None = None,
