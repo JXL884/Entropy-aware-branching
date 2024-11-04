@@ -204,9 +204,9 @@ def generate(
     model_params: ModelConfig,
     tokenizer: Tokenizer,
     prompt: str,
-    max_tokens: int = 8192,
+    max_tokens: int | None = None,
     temperature: float = 1.0,
-    print_stream: bool = True,
+    print_stream: bool = False,
     metrics: bool = False,
 ) -> Generation:
     """
@@ -225,11 +225,12 @@ def generate(
     Returns:
         Generated text string
     """
-    output = ""
     stop_tokens = torch.tensor(tokenizer.stop_token_ids, device=device, dtype=torch.int32)
+    if max_tokens is None: max_tokens = model_params.max_seq_len
 
     with torch.inference_mode():
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
+        response = ""
         bs, seqlen = tokens.shape
         cur_pos = 0
 
@@ -262,7 +263,7 @@ def generate(
             if torch.isin(next_token, stop_tokens).any(): break
 
             token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
-            output += token_text
+            response += token_text
             if print_stream: print(token_text, end='', flush=True)
 
-        return Generation(prompt=prompt, response=output, tokens=gen_tokens.cpu(), metrics=gen_metrics)
+        return Generation(prompt=prompt, response=response, tokens=gen_tokens.cpu(), metrics=gen_metrics)
