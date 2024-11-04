@@ -2,6 +2,7 @@ import os
 import json
 from typing import (
     AbstractSet,
+    Any,
     Collection,
     Dict,
     Iterator,
@@ -126,20 +127,14 @@ class Tokenizer:
         """
         return self.model.decode(t)
 
-    def apply_chat_template(self, messages: list[dict[str, str]] | str) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]] | str, tools:list[dict[str, Any]] | None=None) -> str:
         print("applying chat template...")
         if isinstance(messages, str): messages = [{"role": "user", "content": messages}]
         if self.chat_template:
             from jinja2 import Template
             template = Template(self.chat_template)
-            return template.render(messages=messages, add_generation_prompt=True)
+            return template.render(messages=messages, add_generation_prompt=True, custom_tools=tools)
         else:
-            """
-            assume and apply the following format:
-
-            <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-            Which number is larger, 9.9 or 9.11?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-            """
             out = f"{self.bos_token}"
             for message in messages:
                 out += f"{self.start_header_token}{message['role']}{self.end_header_token}\n{message['content']}{self.eot_token}"

@@ -1,8 +1,18 @@
 from typing import NamedTuple
 import torch
 from torch.nn import functional as F
+from dataclasses import dataclass
 
 LN_2 = 0.69314718056  # ln(2) = 1.0 / LOG2_E
+
+@dataclass
+class TokenMetrics:
+    logits_entropy: float
+    logits_varentropy: float
+    attn_entropy: float
+    attn_varentropy: float
+    agreement: float
+    interaction_strength: float
 
 def calculate_varentropy_logsoftmax(logits: torch.Tensor, axis: int = -1) -> tuple[torch.Tensor, torch.Tensor]:
     """Calculate the entropy and varentropy of the probability distribution using logsoftmax."""
@@ -12,11 +22,11 @@ def calculate_varentropy_logsoftmax(logits: torch.Tensor, axis: int = -1) -> tup
     varentropy = torch.sum(probs * (log_probs / LN_2 + entropy.unsqueeze(-1))**2, dim=axis)
     return entropy, varentropy
 
-def calculate_metrics(logits: torch.Tensor, attention_scores: torch.Tensor) -> dict[str, torch.Tensor]:
+def calculate_metrics(logits: torch.Tensor, attention_scores: torch.Tensor) -> TokenMetrics:
     entropy, varentropy = calculate_varentropy_logsoftmax(logits)
     attention_probs = F.softmax(attention_scores, dim=-1)
     attn_entropy = -torch.sum(attention_probs * torch.log2(torch.clamp(attention_probs, 1e-10, 1.0)), dim=-1)
-    attn_varentropy = torch.var(attn_entropy, dim=-1, unbiased=False) # use biased estimator for small sample size
+    attn_varentropy = torch.var(attn_entropy, dim=-1, unbiased=False)  # use biased estimator for small sample size
 
     # Add a small epsilon to avoid NaN when all values are the same
     attn_varentropy = torch.where(torch.isnan(attn_varentropy), torch.zeros_like(attn_varentropy), attn_varentropy)
@@ -25,14 +35,14 @@ def calculate_metrics(logits: torch.Tensor, attention_scores: torch.Tensor) -> d
 
     interaction_strength = torch.mean(torch.abs(attention_scores), dim=(1, 2, 3))
 
-    return {
-        "logits_entropy": torch.mean(entropy),
-        "logits_varentropy": torch.mean(varentropy),
-        "attn_entropy": torch.mean(attn_entropy),
-        "attn_varentropy": torch.mean(attn_varentropy),
-        "agreement": torch.mean(agreement),
-        "interaction_strength": interaction_strength
-    }
+    return TokenMetrics(
+        logits_entropy=torch.mean(entropy).item(),
+        logits_varentropy=torch.mean(varentropy).item(),
+        attn_entropy=torch.mean(attn_entropy).item(),
+        attn_varentropy=torch.mean(attn_varentropy).item(),
+        agreement=torch.mean(agreement).item(),
+        interaction_strength=interaction_strength.item()
+    )
 
 class AttnStats(NamedTuple):
     entropy: torch.Tensor  # (bsz, n_layers, num_heads)

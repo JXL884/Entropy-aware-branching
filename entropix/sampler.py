@@ -99,10 +99,10 @@ def sample(
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337)
 ) -> Tuple[torch.Tensor, SamplerState]:
     metrics = calculate_metrics(logits, attention_scores)
-    ent, vent = metrics["logits_entropy"], metrics["logits_varentropy"]
-    attn_ent, attn_vent = metrics["attn_entropy"], metrics["attn_varentropy"]
-    agreement = metrics["agreement"]
-    interaction_strength = metrics["interaction_strength"]
+    ent, vent = metrics.logits_entropy, metrics.logits_varentropy
+    attn_ent, attn_vent = metrics.attn_entropy, metrics.attn_varentropy
+    agreement = metrics.agreement
+    interaction_strength = metrics.interaction_strength
 
     cfg = SamplerConfig()
 
@@ -181,20 +181,20 @@ def sample(
             1 + cfg.adaptive_temperature_logits_coefficient * ent + cfg.adaptive_temperature_attention_coefficient * attn_ent -
             cfg.adaptive_temperature_agreement_coefficient * agreement
         )
-        top_p = torch.clamp((cfg.top_p * (1 + cfg.adaptive_top_p_coefficient * attn_vent)).clone().detach(), 0.1, 1.0)
+        top_p = torch.clamp(torch.tensor(cfg.top_p * (1 + cfg.adaptive_top_p_coefficient * attn_vent)), 0.1, 1.0)
         top_k = int(
             torch.clamp(
                 torch.round(
                     torch.tensor(cfg.top_k) * (
-                        1 + cfg.adaptive_top_k_interaction_coefficient * interaction_strength.item() -
-                        cfg.adaptive_top_k_agreement_coefficient * agreement.item()
+                        1 + cfg.adaptive_top_k_interaction_coefficient * interaction_strength -
+                        cfg.adaptive_top_k_agreement_coefficient * agreement
                     )
                 ),
                 min=1,
                 max=100
             ).item()
         )
-        min_p = torch.clamp((cfg.min_p * (1 - cfg.adaptive_min_p_coefficient * vent)).clone().detach(), 0.01, 0.5)
+        min_p = torch.clamp(torch.tensor((cfg.min_p * (1 - cfg.adaptive_min_p_coefficient * vent))), 0.01, 0.5)
 
         samples = []
         for _ in range(cfg.n_adaptive_samples):

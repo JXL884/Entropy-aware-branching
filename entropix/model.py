@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 import os
+import json
 import math
 from pathlib import Path
 from typing import Optional, Tuple, NamedTuple
@@ -12,7 +14,7 @@ import torch.nn.functional as F
 from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelConfig, XfmrWeights
 from entropix.tokenizer import Tokenizer
 from entropix.sampler import sample
-from entropix.stats import AttnStats
+from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
 from entropix.kvcache import KVCache
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -190,6 +192,13 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
         raise ValueError("seqlen <= 1")
     return mask
 
+@dataclass
+class Generation:
+    prompt: str
+    response: str
+    tokens: torch.Tensor
+    metrics: list[TokenMetrics]
+
 def generate(
     xfmr_weights: XfmrWeights,
     model_params: ModelConfig,
@@ -198,9 +207,8 @@ def generate(
     max_tokens: int = 8192,
     temperature: float = 1.0,
     print_stream: bool = True,
-    save: bool = False,
-    plot: bool = False,
-) -> str:
+    metrics: bool = False,
+) -> Generation:
     """
     Generate text from a prompt using the transformer model.
 
@@ -217,32 +225,29 @@ def generate(
     Returns:
         Generated text string
     """
+    output = ""
     stop_tokens = torch.tensor(tokenizer.stop_token_ids, device=device, dtype=torch.int32)
 
     with torch.inference_mode():
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
-
-        # Initialize
-        gen_tokens = None
-        gen_tokens_list = []
-        cur_pos = 0
         bs, seqlen = tokens.shape
+        cur_pos = 0
 
-        # Setup attention mask and positional encodings
         attn_mask = build_attn_mask(seqlen, cur_pos)
         freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)
-
-        # Initialize KV cache
         kvcache = KVCache.new(model_params.n_layers, bs, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(device)
 
-        # Generation loop
-        output = ""
         next_token = tokens
         freqs_end = seqlen
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
+        gen_metrics = []
+
+        # Generation loop
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
             logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
+
+            if metrics: gen_metrics.append(calculate_metrics(logits, scores))
 
             # Get next token
             next_token = sample(gen_tokens, logits, scores, temperature)[0]
@@ -253,7 +258,6 @@ def generate(
 
             # Update generation tracking
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-            gen_tokens_list.append(next_token.item())
 
             if torch.isin(next_token, stop_tokens).any(): break
 
@@ -261,4 +265,4 @@ def generate(
             output += token_text
             if print_stream: print(token_text, end='', flush=True)
 
-        return output
+        return Generation(prompt=prompt, response=output, tokens=gen_tokens.cpu(), metrics=gen_metrics)
