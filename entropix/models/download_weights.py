@@ -74,7 +74,7 @@ def download_weights(
     if out_dir is None: out_dir = Path(f"weights/{model_cfg.name}")
     elif isinstance(out_dir, str): out_dir = Path(out_dir)
     if not out_dir.exists(): out_dir.mkdir(parents=True, exist_ok=True)
-    elif input(f"{out_dir} already exists. Re-download? [y/N] ").lower() != "y": skip_download = True
+    elif input(f"{out_dir} already exists. re-download? [y/N] ").lower() != "y": skip_download = True
 
 
     token = None
@@ -117,7 +117,7 @@ def download_weights(
         elif isinstance(tokenizer_cfg_out_path, str): tokenizer_cfg_out_path = Path(tokenizer_cfg_out_path)
 
         if not tokenizer_out_path.parent.exists(): tokenizer_out_path.parent.mkdir(parents=True, exist_ok=True)
-        if tokenizer_out_path.exists() and input(f"{tokenizer_out_path} already exists. Overwrite? [y/N] ").lower() != "y": return
+        if tokenizer_out_path.exists() and input(f"{tokenizer_out_path} already exists, re-download? [y/N] ").lower() != "y": return
 
         if not tokenizer_url: tokenizer_url = f"https://huggingface.co/{model_cfg.hf_id}/resolve/main/tokenizer.json"
         if not tokenizer_cfg_url: tokenizer_cfg_url = f"https://huggingface.co/{model_cfg.hf_id}/resolve/main/tokenizer_config.json"
