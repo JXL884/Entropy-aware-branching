@@ -95,16 +95,15 @@ def sample(
     logits: torch.Tensor,
     attention_scores: torch.Tensor,
     temperature: float,
+    cfg: SamplerConfig,
     clarifying_question_token: int = 2564,
-    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337)
+    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
 ) -> Tuple[torch.Tensor, SamplerState]:
     metrics = calculate_metrics(logits, attention_scores)
     ent, vent = metrics.logits_entropy, metrics.logits_varentropy
     attn_ent, attn_vent = metrics.attn_entropy, metrics.attn_varentropy
     agreement = metrics.agreement
     interaction_strength = metrics.interaction_strength
-
-    cfg = SamplerConfig()
 
     # Low Entropy, Low Varentropy: "flowing with unspoken intent"
     if cfg.states["flowing"] and (

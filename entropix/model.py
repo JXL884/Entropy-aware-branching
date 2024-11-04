@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelConfig, XfmrWeights
+from entropix.config import DEFAULT_MASK_VALUE, LayerWeights, ModelConfig, SamplerConfig, SamplerState, XfmrWeights
 from entropix.tokenizer import Tokenizer
 from entropix.sampler import sample
 from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
@@ -196,8 +196,9 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
 class Generation:
     prompt: str
     response: str
-    tokens: torch.Tensor
+    tokens: list[str]
     metrics: list[TokenMetrics]
+    sampler_states: list[SamplerState]
 
 def generate(
     xfmr_weights: XfmrWeights,
@@ -207,7 +208,8 @@ def generate(
     max_tokens: int | None = None,
     temperature: float = 1.0,
     print_stream: bool = False,
-    metrics: bool = False,
+    metrics: bool = True,
+    sampler_cfg: SamplerConfig | None = None,
 ) -> Generation:
     """
     Generate text from a prompt using the transformer model.
@@ -227,6 +229,7 @@ def generate(
     """
     stop_tokens = torch.tensor(tokenizer.stop_token_ids, device=device, dtype=torch.int32)
     if max_tokens is None: max_tokens = model_params.max_seq_len
+    if sampler_cfg is None: sampler_cfg = SamplerConfig()
 
     with torch.inference_mode():
         tokens = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
@@ -242,28 +245,31 @@ def generate(
         freqs_end = seqlen
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
         gen_metrics = []
+        gen_tokens_text = []
+        sampler_states = []
 
         # Generation loop
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
             logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
+            next_token, sampler_state = sample(gen_tokens, logits, scores, temperature, sampler_cfg)
 
-            if metrics: gen_metrics.append(calculate_metrics(logits, scores))
+            if metrics:
+                gen_metrics.append(calculate_metrics(logits, scores))
+                sampler_states.append(sampler_state)
 
-            # Get next token
-            next_token = sample(gen_tokens, logits, scores, temperature)[0]
-
-            # Update position
             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
             freqs_end = cur_pos + 1
 
-            # Update generation tracking
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
 
+            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
+            gen_tokens_text.append(token_text)
+
+            # break after adding the stop token and its metrics to output but before adding to response text / printing
             if torch.isin(next_token, stop_tokens).any(): break
 
-            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
-            response += token_text
             if print_stream: print(token_text, end='', flush=True)
+            response += token_text
 
-        return Generation(prompt=prompt, response=response, tokens=gen_tokens.cpu(), metrics=gen_metrics)
+        return Generation(prompt=prompt, response=response, tokens=gen_tokens_text, metrics=gen_metrics, sampler_states=sampler_states)

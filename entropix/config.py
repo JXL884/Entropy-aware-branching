@@ -69,77 +69,76 @@ class XfmrWeights(NamedTuple):
     output: torch.Tensor
     layer_weights: list[LayerWeights]
 
-# Experimental custom config to trigger different sampler states
+@dataclass
 class SamplerConfig:
-    def __init__(self):
-        self.states = {
-            # Low Entropy, Low Varentropy: "flowing with unspoken intent"
-            "flowing": True,
-            # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
-            "treading": True,
-            # Low Entropy, High Varentropy: "exploring forks in the path"
-            "exploring": True,
-            # High Entropy, High Varentropy: "resampling in the mist"
-            "resampling": True,
-            # extras
-            "agreement": False,
-            "interaction_strength": False,
-        }
+    states = {
+        # Low Entropy, Low Varentropy: "flowing with unspoken intent"
+        "flowing": True,
+        # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
+        "treading": True,
+        # Low Entropy, High Varentropy: "exploring forks in the path"
+        "exploring": True,
+        # High Entropy, High Varentropy: "resampling in the mist"
+        "resampling": True,
+        # extras
+        "agreement": False,
+        "interaction_strength": False,
+    }
 
-        # Sampler state extras
-        self.temperature = 0.666
-        self.top_p = 0.90
-        self.top_k = 27
-        self.min_p = 0.03
+    # Sampler state extras
+    temperature = 0.666
+    top_p = 0.90
+    top_k = 27
+    min_p = 0.03
 
-        self.low_logits_entropy_threshold = 0.6
-        self.medium_logits_entropy_threshold = 1.584
-        self.high_logits_entropy_threshold = 2.17
+    low_logits_entropy_threshold = 0.6
+    medium_logits_entropy_threshold = 1.584
+    high_logits_entropy_threshold = 2.17
 
-        self.low_logits_varentropy_threshold = 3.28
-        self.medium_logits_varentropy_threshold = 3.85
-        self.high_logits_varentropy_threshold = 6.18
+    low_logits_varentropy_threshold = 3.28
+    medium_logits_varentropy_threshold = 3.85
+    high_logits_varentropy_threshold = 6.18
 
-        self.low_attention_entropy_threshold = 8.989
-        self.medium_attention_entropy_threshold = 8.99
-        self.high_attention_entropy_threshold = 8.991
+    low_attention_entropy_threshold = 8.989
+    medium_attention_entropy_threshold = 8.99
+    high_attention_entropy_threshold = 8.991
 
-        self.low_attention_varentropy_threshold = 5.212
-        self.medium_attention_varentropy_threshold = 5.9125
-        self.high_attention_varentropy_threshold = 6.92
+    low_attention_varentropy_threshold = 5.212
+    medium_attention_varentropy_threshold = 5.9125
+    high_attention_varentropy_threshold = 6.92
 
-        self.low_agreement_threshold = 2e-06
-        self.medium_agreement_threshold = 4e-06
-        self.high_agreement_threshold = 5e-06
+    low_agreement_threshold = 2e-06
+    medium_agreement_threshold = 4e-06
+    high_agreement_threshold = 5e-06
 
-        self.low_interaction_strength_threshold = 0.2
-        self.medium_interaction_strength_threshold = 0.247
-        self.high_interaction_strength_threshold = 0.264
+    low_interaction_strength_threshold = 0.2
+    medium_interaction_strength_threshold = 0.247
+    high_interaction_strength_threshold = 0.264
 
-        self.high_entropy_attention_offset = 1.3
-        self.high_entropy_attention_coefficient = 0.2
+    high_entropy_attention_offset = 1.3
+    high_entropy_attention_coefficient = 0.2
 
-        self.low_entropy_interaction_strength_offset = 1.2
-        self.low_entropy_interaction_strength_coefficient = 0.3
+    low_entropy_interaction_strength_offset = 1.2
+    low_entropy_interaction_strength_coefficient = 0.3
 
-        self.high_entropy_varentropy_attention_offset = 2.0
-        self.high_entropy_varentropy_attention_coefficient = 0.5
+    high_entropy_varentropy_attention_offset = 2.0
+    high_entropy_varentropy_attention_coefficient = 0.5
 
-        self.n_adaptive_samples = 5
+    n_adaptive_samples = 5
 
-        self.adaptive_temperature_logits_coefficient = 0.3
-        self.adaptive_temperature_attention_coefficient = 0.2
-        self.adaptive_temperature_agreement_coefficient = 0.2
-        self.adaptive_top_p_coefficient = 0.1
-        self.adaptive_top_k_interaction_coefficient = 0.3
-        self.adaptive_top_k_agreement_coefficient = 0.2
-        self.adaptive_min_p_coefficient = 0.5
-        self.adaptive_score_logits_entropy_coefficient = 0.1
-        self.adaptive_score_attention_entropy_coefficient = 0.2
-        self.adaptive_score_logits_varentropy_coefficient = 0.3
-        self.adaptive_score_attention_varentropy_coefficient = 0.4
-        self.adaptive_score_agreement_coefficient = 0.5
-        self.adaptive_score_interaction_strength_coefficient = 0.6
+    adaptive_temperature_logits_coefficient = 0.3
+    adaptive_temperature_attention_coefficient = 0.2
+    adaptive_temperature_agreement_coefficient = 0.2
+    adaptive_top_p_coefficient = 0.1
+    adaptive_top_k_interaction_coefficient = 0.3
+    adaptive_top_k_agreement_coefficient = 0.2
+    adaptive_min_p_coefficient = 0.5
+    adaptive_score_logits_entropy_coefficient = 0.1
+    adaptive_score_attention_entropy_coefficient = 0.2
+    adaptive_score_logits_varentropy_coefficient = 0.3
+    adaptive_score_attention_varentropy_coefficient = 0.4
+    adaptive_score_agreement_coefficient = 0.5
+    adaptive_score_interaction_strength_coefficient = 0.6
 
 class SamplerState(Enum):
     FLOWING = "Flowing with unspoken intent"
