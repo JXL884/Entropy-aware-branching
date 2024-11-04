@@ -197,7 +197,9 @@ def generate(
     prompt: str,
     max_tokens: int = 8192,
     temperature: float = 1.0,
-    stream: bool = True
+    print_stream: bool = True,
+    save: bool = False,
+    plot: bool = False,
 ) -> str:
     """
     Generate text from a prompt using the transformer model.
@@ -233,34 +235,44 @@ def generate(
         # Initialize KV cache
         kvcache = KVCache.new(model_params.n_layers, bs, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim).to(device)
 
-        # Initial forward pass
-        logits, kvcache, _, _ = xfmr(xfmr_weights, model_params, tokens, cur_pos, freqs_cis[:seqlen], kvcache, attn_mask=attn_mask)
-        next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-        gen_tokens = next_token
-        gen_tokens_list.append(next_token.item())
-
-        if stream:
-            token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
-            print(token_text, end='', flush=True)
-
-        cur_pos = seqlen
-
         # Generation loop
+        next_token = tokens
+        freqs_end = seqlen
+        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
         while cur_pos < max_tokens:
-            cur_pos += 1
-            logits, kvcache, scores, _ = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos + 1], kvcache)
+            attn = attn_mask if cur_pos < seqlen else None
+            logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
 
+            # Get next token
             next_token = sample(gen_tokens, logits, scores, temperature)[0]
+
+            # Update position
+            cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
+            freqs_end = cur_pos + 1
+
+            # Update generation tracking
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
             gen_tokens_list.append(next_token.item())
 
-            if stream:
+            if torch.isin(next_token, stop_tokens).any(): break
+            elif print_stream:
                 token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
                 print(token_text, end='', flush=True)
 
-            if torch.isin(next_token, stop_tokens).any():
-                print("<|stop|>", end='', flush=True)
-                break
+
+            # cur_pos += 1
+            # logits, kvcache, scores, attn_stats = xfmr(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos + 1], kvcache)
+            #
+            # next_token = sample(gen_tokens, logits, scores, temperature)[0]
+            # gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+            # gen_tokens_list.append(next_token.item())
+            #
+            # if print_stream:
+            #     token_text = tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
+            #     print(token_text, end='', flush=True)
+            #
+            # if torch.isin(next_token, stop_tokens).any():
+            #     break
 
         output_text = tokenizer.decode(gen_tokens_list)
 
