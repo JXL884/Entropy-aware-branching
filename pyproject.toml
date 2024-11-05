@@ -17,5 +17,6 @@ dependencies = [
     "tyro>=0.8.14",
 ]
 
-[tool.setuptools]
-packages = ["entropix"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["entropix*"]
