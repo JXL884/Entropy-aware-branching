@@ -1,21 +1,19 @@
-from dataclasses import dataclass
-import os
-import json
+import logging
 import math
+import os
 from pathlib import Path
-from typing import Optional, Tuple, NamedTuple
+from typing import NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState
-from entropix.tokenizer import Tokenizer
+from entropix.kvcache import KVCache
 from entropix.sampler import sample
 from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
-from entropix.kvcache import KVCache
+from entropix.tokenizer import Tokenizer
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -240,11 +238,11 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
 def generate(
     prompt: str,
     model: Model,
+    sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     temperature: float = 1.0,
     print_stream: bool = False,
     metrics: bool = True,
-    sampler_cfg: SamplerConfig | None = None,
 ) -> Generation:
     """
     Generate text from a prompt using the transformer model.
@@ -259,7 +257,9 @@ def generate(
     """
     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
     if max_tokens is None: max_tokens = model.params.max_seq_len
-    if sampler_cfg is None: sampler_cfg = SamplerConfig()
+    if sampler_cfg is None:
+        logging.warning("No sampler config provided, using default config")
+        sampler_cfg = SamplerConfig()
 
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)

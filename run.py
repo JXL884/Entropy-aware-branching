@@ -31,17 +31,15 @@ for model_params in (LLAMA_1B, SMOLLM_360M):
     weights = load_weights(weights_path, model_params)
     model = Model(weights, model_params, tokenizer)
 
-
     # Don't forget to apply the chat template if using an instruct model
     prompt = tokenizer.apply_chat_template(messages)
     # print("\n--- Full input prompt ---")
     # print(prompt)
-    # print("-------------------------")
-
+    # print("-------------------------\n")
 
     print(f"\nUSER: {messages[1]['content']}")
 
-    gen_data = generate(prompt, model, print_stream=True)
+    gen_data = generate(prompt, model, sampler_cfg, print_stream=True)
 
     print()
     plot_sampler(gen_data, out=f"{model_params.name}_sampler_plot.html")
