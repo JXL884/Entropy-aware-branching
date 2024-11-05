@@ -4,7 +4,7 @@
 
 Supports `llama` and `smollm` models & easy to add more.
 
-![image](https://github.com/user-attachments/assets/f19903ee-9a05-4062-8402-66241de5def0)
+![image](https://github.com/user-attachments/assets/6a3d9d1d-7201-4a72-a2dd-640d7582c56d)
 
 ## Getting Started
 
