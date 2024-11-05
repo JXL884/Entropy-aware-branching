@@ -128,7 +128,6 @@ class Tokenizer:
         return self.model.decode(t)
 
     def apply_chat_template(self, messages: list[dict[str, str]] | str, tools:list[dict[str, Any]] | None=None) -> str:
-        print("applying chat template...")
         if isinstance(messages, str): messages = [{"role": "user", "content": messages}]
         if self.chat_template:
             from jinja2 import Template

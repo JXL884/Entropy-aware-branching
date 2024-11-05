@@ -4,7 +4,10 @@ from entropix.model import load_weights, generate, Model
 from entropix.tokenizer import Tokenizer
 from entropix.plot import plot_entropy, plot_sampler
 
-prompt = "Which number is larger, 9.9 or 9.11?"
+messages = [
+    {"role": "system", "content": "You are a super intelligent assistant."},
+    {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
+]
 sampler_cfg = SamplerConfig()  # using the default sampler thresholds, can specify inline to change
 # e.g. to use all defaults except logit entropy thresholds
 # sampler_cfg = SamplerConfig(
@@ -28,10 +31,15 @@ for model_params in (LLAMA_1B, SMOLLM_360M):
     weights = load_weights(weights_path, model_params)
     model = Model(weights, model_params, tokenizer)
 
-    print(f"\nUSER: {prompt}\n")
 
     # Don't forget to apply the chat template if using an instruct model
-    prompt = tokenizer.apply_chat_template(prompt)
+    prompt = tokenizer.apply_chat_template(messages)
+    # print("\n--- Full input prompt ---")
+    # print(prompt)
+    # print("-------------------------")
+
+
+    print(f"\nUSER: {messages[1]['content']}")
 
     gen_data = generate(prompt, model, print_stream=True)
 
