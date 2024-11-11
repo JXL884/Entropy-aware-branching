@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Sized
 import plotly.graph_objects as go
 import numpy as np
 import json
@@ -330,16 +331,8 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         for threshold, color in threshold_list:
             fig.add_trace(create_threshold_plane(threshold, axis, color, f'{threshold_type.replace("_", " ").title()} Threshold: {threshold}', data_type))
 
-    # Create buttons for toggling views
-    buttons = [
-        dict(label='Show All', method='update', args=[{'visible': [True] * len(fig.data)}]),  # type: ignore
-        dict(label='Hide All', method='update', args=[{'visible': [True, True] + [False] * (len(fig.data) - 2)}]),  # type: ignore
-        dict(label='Logits Only', method='update',
-             args=[{'visible': [True, False] + [True if i < 6 else False for i in range(len(fig.data) - 2)]}]),  # type: ignore
-        dict(label='Attention Only', method='update',
-             args=[{'visible': [False, True] + [True if i >= 6 else False for i in range(len(fig.data) - 2)]}])  # type: ignore
-    ]
-
+    # assert than fig.data is of type `Sized`
+    assert isinstance(fig.data, Sized)
     # Update layout
     fig.update_layout(
         scene=dict(
@@ -353,7 +346,23 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         margin=dict(l=0, r=0, b=0, t=40),
         title='',
         updatemenus=[
-            dict(type="buttons", direction="right", x=0.0, y=1.1, xanchor='left', yanchor='top', pad={"r": 10, "t": 10}, showactive=True, buttons=buttons)
+            dict(
+                type="dropdown",
+                direction="down",
+                x=0.0,
+                y=1.15,
+                xanchor='left',
+                yanchor='top',
+                pad={"r": 10, "t": 10},
+                buttons=[
+                    dict(label="Points", method="update", args=[{"visible": [True, True] + [False] * (len(fig.data) - 2)}]),
+                    dict(label="Logits", method="update", args=[{"visible": [True, False] + [False] * (len(fig.data) - 2)}]),
+                    dict(label="Logits + Thresholds", method="update", args=[{"visible": [True, False] + [i < 6 for i in range(len(fig.data) - 2)]}]),
+                    dict(label="Attention", method="update", args=[{"visible": [False, True] + [False] * (len(fig.data) - 2)}]),
+                    dict(label="Attention + Thresholds", method="update", args=[{"visible": [False, True] + [i >= 6 for i in range(len(fig.data) - 2)]}]),
+                    dict(label="All", method="update", args=[{"visible": [True] * len(fig.data)}]),
+                ],
+            )
         ],
         autosize=True,
         legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
