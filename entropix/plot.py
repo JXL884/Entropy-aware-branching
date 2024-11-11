@@ -338,16 +338,16 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
             ],
             'attention',
         ),
-        (
-            'attention_varentropy',
-            'z',
-            [
-                (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
-                (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
-                (sampler_config.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
-            ],
-            'attention',
-        )
+        # (
+        #     'attention_varentropy',
+        #     'z',
+        #     [
+        #         (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
+        #         (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
+        #         (sampler_config.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
+        #     ],
+        #     'attention',
+        # )
     ]
 
     for threshold_type, axis, threshold_list, data_type in thresholds:
@@ -363,6 +363,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
             zaxis_title='Entropy',
             aspectmode='manual',
             aspectratio=dict(x=1, y=0.5, z=1),
+            camera=dict(eye=dict(x=0.122, y=-1.528, z=1.528)),
             xaxis=dict(),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
@@ -382,7 +383,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                         method="relayout",
                         args=[
                             {
-                                "scene.camera": {"eye": {"x": 1.25, "y": 1.25, "z": 1.25}},
+                                "scene.camera": {"eye": {"x": 0.122, "y": -1.528, "z": 1.528}},
                                 "scene.xaxis.title": "Token Position",
                                 "scene.yaxis.title": "Varentropy",
                                 "scene.zaxis.title": "Entropy",
@@ -436,23 +437,50 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                 yanchor='top',
                 pad={"r": 10, "t": 10},
                 buttons=[
+                    # visible = [logit lines, attention lines, logits points, attention points, ...3 logits entropy thresholds, ...3 logits varentropy thresholds, ...3 attention entropy thresholds, ...3 attention varentropy thresholds]
                     dict(label="Points", method="update", args=[{"visible": [False, False, True, True] + [False] * (len(fig.data) - 4)}]),
                     dict(label="Lines", method="update", args=[{"visible": [True, True, True, True] + [False] * (len(fig.data) - 4)}]),
                     dict(label="Logits", method="update", args=[{"visible": [False, False, True, False] + [False] * (len(fig.data) - 4)}]),
                     dict(
-                        label="Logits + Thresholds",
+                        label="Logits + Entropy Thresholds",
                         method="update",
-                        args=[{"visible": [False, False, True, False] + [i < 6 for i in range(len(fig.data) - 4)]}]
+                        #] + [i < 3 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [True, False, True, False, True, True, True, False, False, False] + [False] * 6}],
+                    ),
+                    dict(
+                        label="Logits + Varentropy Thresholds",
+                        method="update",
+                        # args=[{"visible": [True, False, True, False] + [3 <= i < 6 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [True, False, True, False, False, False, False, True, True, True] + [False] * 6}],
+                    ),
+                    dict(
+                        label="Logits + All Thresholds",
+                        method="update",
+                        # args=[{"visible": [True, False, True, False] + [i < 6 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [True, False, True, False, True, True, True, True, True, True] + [False] * 6}],
                     ),
                     dict(label="Attention", method="update", args=[{"visible": [False, False, False, True] + [False] * (len(fig.data) - 4)}]),
                     dict(
-                        label="Attention + Thresholds",
+                        label="Attention + Entropy Thresholds",
                         method="update",
-                        args=[{"visible": [False, False, False, True] + [i >= 6 for i in range(len(fig.data) - 4)]}]
+                        # args=[{"visible": [False, True, False, True] + [6 <= i < 9 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [False, True, False, True] + [False] * 6 + [True, True, True, False, False, False]}],
+                    ),
+                    dict(
+                        label="Attention + Varentropy Thresholds",
+                        method="update",
+                        # args=[{"visible": [False, True, False, True] + [9 <= i < 12 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [False, True, False, True] + [False] * 6 + [False, False, False, True, True, True]}],
+                    ),
+                    dict(
+                        label="Attention + All Thresholds",
+                        method="update",
+                        # args=[{"visible": [False, True, False, True] + [i >= 6 for i in range(len(fig.data) - 4)]}]
+                        args=[{"visible": [False, True, False, True] + [False] * 6 + [True] * 6}],
                     ),
                     dict(label="All", method="update", args=[{"visible": [True] * len(fig.data)}]),
                 ],
-            ),
+            )
         ],
         autosize=True,
         legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
