@@ -195,7 +195,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         mode='lines',
         line=dict(color='rgba(100,40,120,0.5)', width=2),
         name='Logits',
-        visible=True,
+        visible=False,
     )
     varentropy_lines = go.Scatter3d(
         x=positions,
@@ -204,7 +204,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         mode='lines',
         line=dict(color='rgba(255,10,10,0.5)', width=2),
         name='Attention',
-        visible=True,
+        visible=False,
     )
 
     fig.add_trace(entropy_lines)
@@ -363,21 +363,70 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
             zaxis_title='Entropy',
             aspectmode='manual',
             aspectratio=dict(x=1, y=0.5, z=1),
-            xaxis=dict(autorange='reversed'),
+            xaxis=dict(),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
         title='',
         updatemenus=[
             dict(
-                type="dropdown",
-                direction="down",
+                type="buttons",
+                direction="right",
                 x=0.0,
                 y=1.15,
                 xanchor='left',
                 yanchor='top',
                 pad={"r": 10, "t": 10},
                 buttons=[
-                    dict(label="Points", method="update", args=[{"visible": [True, True, True, True] + [False] * (len(fig.data) - 4)}]),
+                    dict(
+                        label="Default View",
+                        method="relayout",
+                        args=[
+                            {
+                                "scene.camera": {"eye": {"x": 1.25, "y": 1.25, "z": 1.25}},
+                                "scene.xaxis.title": "Token Position",
+                                "scene.yaxis.title": "Varentropy",
+                                "scene.zaxis.title": "Entropy",
+                            }
+                        ]
+                    ),
+                    dict(
+                        label="Position vs Entropy",
+                        method="relayout",
+                        args=[
+                            {
+                                "scene.camera": {"eye": {"x": 0, "y": -2.5, "z": 0.1}},
+                                "scene.xaxis.title": "Token Position",
+                                "scene.yaxis.title": "",
+                                "scene.zaxis.title": "Entropy",
+                            }
+                        ]
+                    ),
+                    dict(
+                        label="Position vs Varentropy",
+                        method="relayout",
+                        args=[
+                            {
+                                # "scene.camera": {"eye": {"x": 0, "y": -2.5, "z": -10}},
+                                # "scene.camera": {"eye": {"x": 0, "y": -0.99, "z": -2}, "center": {"x": 0, "y": 0, "z": 0}, "up": {"x": 0, "y": 2, "z": 0}},
+                                "scene.camera": {"eye": {"x": 0, "y": 0.1, "z": 2.5}, "up": {"x": 0, "y": 1, "z": 0}},
+                                "scene.xaxis.title": "Token Position",
+                                "scene.yaxis.title": "Varentropy",
+                                "scene.zaxis.title": "",
+                            }
+                        ]
+                    ),
+                ],
+            ),
+            dict(
+                type="dropdown",
+                direction="down",
+                x=0.0,
+                y=1.08,
+                xanchor='left',
+                yanchor='top',
+                pad={"r": 10, "t": 10},
+                buttons=[
+                    dict(label="Points", method="update", args=[{"visible": [False, False, True, True] + [False] * (len(fig.data) - 4)}]),
                     dict(label="Logits", method="update", args=[{"visible": [True, False, True, False] + [False] * (len(fig.data) - 4)}]),
                     dict(
                         label="Logits + Thresholds",
