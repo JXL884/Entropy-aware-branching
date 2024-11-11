@@ -406,12 +406,22 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                         method="relayout",
                         args=[
                             {
-                                # "scene.camera": {"eye": {"x": 0, "y": -2.5, "z": -10}},
-                                # "scene.camera": {"eye": {"x": 0, "y": -0.99, "z": -2}, "center": {"x": 0, "y": 0, "z": 0}, "up": {"x": 0, "y": 2, "z": 0}},
                                 "scene.camera": {"eye": {"x": 0, "y": 0.1, "z": 2.5}, "up": {"x": 0, "y": 1, "z": 0}},
                                 "scene.xaxis.title": "Token Position",
                                 "scene.yaxis.title": "Varentropy",
                                 "scene.zaxis.title": "",
+                            }
+                        ]
+                    ),
+                    dict(
+                        label="Entropy vs Varentropy",
+                        method="relayout",
+                        args=[
+                            {
+                                "scene.camera": {"eye": {"x": -2.5, "y": 0.1, "z": 0.1}, "up": {"x": 0, "y": 1, "z": 0}},
+                                "scene.xaxis.title": "",
+                                "scene.yaxis.title": "Varentropy",
+                                "scene.zaxis.title": "Entropy",
                             }
                         ]
                     ),
@@ -427,13 +437,14 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                 pad={"r": 10, "t": 10},
                 buttons=[
                     dict(label="Points", method="update", args=[{"visible": [False, False, True, True] + [False] * (len(fig.data) - 4)}]),
-                    dict(label="Logits", method="update", args=[{"visible": [True, False, True, False] + [False] * (len(fig.data) - 4)}]),
+                    dict(label="Lines", method="update", args=[{"visible": [True, True, True, True] + [False] * (len(fig.data) - 4)}]),
+                    dict(label="Logits", method="update", args=[{"visible": [False, False, True, False] + [False] * (len(fig.data) - 4)}]),
                     dict(
                         label="Logits + Thresholds",
                         method="update",
                         args=[{"visible": [False, False, True, False] + [i < 6 for i in range(len(fig.data) - 4)]}]
                     ),
-                    dict(label="Attention", method="update", args=[{"visible": [False, True, False, True] + [False] * (len(fig.data) - 4)}]),
+                    dict(label="Attention", method="update", args=[{"visible": [False, False, False, True] + [False] * (len(fig.data) - 4)}]),
                     dict(
                         label="Attention + Thresholds",
                         method="update",
