@@ -147,7 +147,8 @@ def plot_sampler(generation_data: Generation, out: str | None):
     if not out:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = f"sampler_metrics_{timestamp}.html"
-    elif not out.endswith(".html"): out += ".html"
+    elif not out.endswith(".html"):
+        out += ".html"
     fig.write_html(out, include_plotlyjs=True, full_html=True)
     print(f"Sampler metrics visualization saved to {out}")
 
@@ -188,9 +189,9 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     # Add logits entropy/varentropy scatter
     fig.add_trace(
         go.Scatter3d(
-            x=entropies,
+            x=positions,
             y=varentropies,
-            z=positions,
+            z=entropies,
             mode='markers',
             marker=dict(
                 size=5,
@@ -208,9 +209,9 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     # Add attention entropy/varentropy scatter
     fig.add_trace(
         go.Scatter3d(
-            x=attn_entropies,
+            x=positions,
             y=attn_varentropies,
-            z=positions,
+            z=attn_entropies,
             mode='markers',
             marker=dict(
                 size=5,
@@ -227,26 +228,32 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
 
     # Calculate the limits for x, y, and z
 
-    logits_x_min, logits_x_max = min(entropies), max(entropies)
+    x_min, x_max = min(positions), max(positions)
     logits_y_min, logits_y_max = min(varentropies), max(varentropies)
-    attention_x_min, attention_x_max = min(attn_entropies), max(attn_entropies)
+    logits_z_min, logits_z_max = min(entropies), max(entropies)
     attention_y_min, attention_y_max = min(attn_varentropies), max(attn_varentropies)
-    z_min, z_max = min(positions), max(positions)
+    attention_z_min, attention_z_max = min(attn_entropies), max(attn_entropies)
+
+    # logits_x_min, logits_x_max = min(entropies), max(entropies)
+    # logits_y_min, logits_y_max = min(varentropies), max(varentropies)
+    # attention_x_min, attention_x_max = min(attn_entropies), max(attn_entropies)
+    # attention_y_min, attention_y_max = min(attn_varentropies), max(attn_varentropies)
+    # z_min, z_max = min(positions), max(positions)
 
     # Function to create threshold planes
     def create_threshold_plane(threshold, axis, color, name, data_type):
         if data_type == 'logits':
-            x_min, x_max = logits_x_min, logits_x_max
             y_min, y_max = logits_y_min, logits_y_max
+            z_min, z_max = logits_z_min, logits_z_max
         else:  # attention
-            x_min, x_max = attention_x_min, attention_x_max
             y_min, y_max = attention_y_min, attention_y_max
+            z_min, z_max = attention_z_min, attention_z_max
 
-        if axis == 'x':
+        if axis == 'z':
             return go.Surface(
-                x=[[threshold, threshold], [threshold, threshold]],
-                y=[[y_min, y_max], [y_min, y_max]],
-                z=[[z_min, z_min], [z_max, z_max]],
+                x=[[x_min, x_max], [x_min, x_max]],
+                y=[[y_min, y_min], [y_max, y_max]],
+                z=[[threshold, threshold], [threshold, threshold]],
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 name=name,
@@ -260,13 +267,24 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 name=name,
+                visible=False,
+            )
+        else:
+            # Default case, return a dummy surface if axis is neither 'y' nor 'z'
+            return go.Surface(
+                x=[[x_min, x_max], [x_min, x_max]],
+                y=[[y_min, y_min], [y_max, y_max]],
+                z=[[z_min, z_min], [z_max, z_max]],
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                name=name,
                 visible=False
             )
+            # Add threshold planes
 
-    # Add threshold planes
     thresholds = [
         (
-            'logits_entropy', 'x', [
+            'logits_entropy', 'z', [
                 (sampler_config.low_logits_entropy_threshold, 'rgba(255, 0, 0, 0.2)'),
                 (sampler_config.medium_logits_entropy_threshold, 'rgba(0, 255, 0, 0.2)'),
                 (sampler_config.high_logits_entropy_threshold, 'rgba(0, 0, 255, 0.2)'),
@@ -280,7 +298,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
             ], 'logits'
         ),
         (
-            'attention_entropy', 'x', [
+            'attention_entropy', 'z', [
                 (sampler_config.low_attention_entropy_threshold, 'rgba(255, 192, 203, 0.2)'),
                 (sampler_config.medium_attention_entropy_threshold, 'rgba(0, 255, 255, 0.2)'),
                 (sampler_config.high_attention_entropy_threshold, 'rgba(255, 255, 0, 0.2)'),
@@ -289,6 +307,16 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         (
             'attention_varentropy',
             'y',
+            [
+                (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
+                (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
+                (sampler_config.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
+            ],
+            'attention',
+        ),
+        (
+            'attention_varentropy',
+            'z',
             [
                 (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
                 (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
@@ -315,11 +343,12 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     # Update layout
     fig.update_layout(
         scene=dict(
-            xaxis_title='Entropy',
+            xaxis_title='Token Position',
             yaxis_title='Varentropy',
-            zaxis_title='Token Position',
+            zaxis_title='Entropy',
             aspectmode='manual',
-            aspectratio=dict(x=1, y=1, z=0.5),
+            aspectratio=dict(x=1, y=0.5, z=1),
+            xaxis=dict(autorange='reversed'),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
         title='',
@@ -330,11 +359,11 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
     )
 
-
     if not out:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out = f"entropy_plot_{timestamp}.html"
-    elif not out.endswith(".html"): out += ".html"
+    elif not out.endswith(".html"):
+        out += ".html"
     fig.write_html(out, include_plotlyjs=True, full_html=True)
     print(f"Entropy plot saved to {out}")
 
