@@ -187,6 +187,29 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     # Create the 3D scatter plot
     fig = go.Figure()
 
+    # Create lines connecting dots based on entropy and varentropy
+    entropy_lines = go.Scatter3d(
+        x=positions,
+        y=varentropies,
+        z=entropies,
+        mode='lines',
+        line=dict(color='rgba(100,40,120,0.5)', width=2),
+        name='Logits',
+        visible=True,
+    )
+    varentropy_lines = go.Scatter3d(
+        x=positions,
+        y=attn_varentropies,
+        z=attn_entropies,
+        mode='lines',
+        line=dict(color='rgba(255,10,10,0.5)', width=2),
+        name='Attention',
+        visible=True,
+    )
+
+    fig.add_trace(entropy_lines)
+    fig.add_trace(varentropy_lines)
+
     # Add logits entropy/varentropy scatter
     fig.add_trace(
         go.Scatter3d(
@@ -331,7 +354,6 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         for threshold, color in threshold_list:
             fig.add_trace(create_threshold_plane(threshold, axis, color, f'{threshold_type.replace("_", " ").title()} Threshold: {threshold}', data_type))
 
-    # assert than fig.data is of type `Sized`
     assert isinstance(fig.data, Sized)
     # Update layout
     fig.update_layout(
@@ -355,14 +377,22 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                 yanchor='top',
                 pad={"r": 10, "t": 10},
                 buttons=[
-                    dict(label="Points", method="update", args=[{"visible": [True, True] + [False] * (len(fig.data) - 2)}]),
-                    dict(label="Logits", method="update", args=[{"visible": [True, False] + [False] * (len(fig.data) - 2)}]),
-                    dict(label="Logits + Thresholds", method="update", args=[{"visible": [True, False] + [i < 6 for i in range(len(fig.data) - 2)]}]),
-                    dict(label="Attention", method="update", args=[{"visible": [False, True] + [False] * (len(fig.data) - 2)}]),
-                    dict(label="Attention + Thresholds", method="update", args=[{"visible": [False, True] + [i >= 6 for i in range(len(fig.data) - 2)]}]),
+                    dict(label="Points", method="update", args=[{"visible": [True, True, True, True] + [False] * (len(fig.data) - 4)}]),
+                    dict(label="Logits", method="update", args=[{"visible": [True, False, True, False] + [False] * (len(fig.data) - 4)}]),
+                    dict(
+                        label="Logits + Thresholds",
+                        method="update",
+                        args=[{"visible": [False, False, True, False] + [i < 6 for i in range(len(fig.data) - 4)]}]
+                    ),
+                    dict(label="Attention", method="update", args=[{"visible": [False, True, False, True] + [False] * (len(fig.data) - 4)}]),
+                    dict(
+                        label="Attention + Thresholds",
+                        method="update",
+                        args=[{"visible": [False, False, False, True] + [i >= 6 for i in range(len(fig.data) - 4)]}]
+                    ),
                     dict(label="All", method="update", args=[{"visible": [True] * len(fig.data)}]),
                 ],
-            )
+            ),
         ],
         autosize=True,
         legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
