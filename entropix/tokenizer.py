@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from typing import (
     AbstractSet,
     Any,
@@ -27,13 +28,14 @@ class Tokenizer:
     special_tokens: Dict[str, int]
     num_reserved_special_tokens = 17
 
-    def __init__(self, tokenizer_path: str, tokenizer_cfg_path: str | None = None):
+    def __init__(self, tokenizer_path: str | Path, tokenizer_cfg_path: str | None = None):
         """
         Initializes the Tokenizer with a tokenizer.json file.
 
         Args:
             tokenizer_path (str): The path to the tokenizer.json file.
         """
+        if isinstance(tokenizer_path, Path): tokenizer_path = str(tokenizer_path)
         assert os.path.isfile(tokenizer_path), tokenizer_path
 
         self.model = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
@@ -62,19 +64,23 @@ class Tokenizer:
         self.stop_token_ids = [self.eot_id, self.eom_id]
 
         # TODO: same with these other special tokens not (always) defined in the configs
-        self.pad_token = cfg["pad_token"] if "pad_token" in cfg else "<|finetune_right_pad_id|>" if "<|finetune_right_pad_id|>" in self.special_tokens else self.eos_token
+        self.pad_token = cfg["pad_token"
+                            ] if "pad_token" in cfg else "<|finetune_right_pad_id|>" if "<|finetune_right_pad_id|>" in self.special_tokens else self.eos_token
         self.pad_id = self.special_tokens[self.pad_token]
-        self.python_tag_token = cfg["python_tag"] if "python_tag" in cfg else "<|python_tag|>" if "<|python_tag|>" in self.special_tokens else "<jupyter_code>" if "<jupyter_code>" in self.special_tokens else ""
+        self.python_tag_token = cfg[
+            "python_tag"
+        ] if "python_tag" in cfg else "<|python_tag|>" if "<|python_tag|>" in self.special_tokens else "<jupyter_code>" if "<jupyter_code>" in self.special_tokens else ""
         self.python_tag_id = self.special_tokens[self.python_tag_token] if self.python_tag_token else None
 
         self.chat_template = cfg["chat_template"] if "chat_template" in cfg else None
 
         # FIX: and these seem to never be defined?
-        self.start_header_token = cfg["start_header_token"] if "start_header_token" in cfg else "<|start_header_id|>" if "<|start_header_id|>" in self.special_tokens else ""
+        self.start_header_token = cfg["start_header_token"
+                                     ] if "start_header_token" in cfg else "<|start_header_id|>" if "<|start_header_id|>" in self.special_tokens else ""
         self.start_header_id = self.special_tokens[self.start_header_token] if self.start_header_token else None
-        self.end_header_token = cfg["end_header_token"] if "end_header_token" in cfg else "<|end_header_id|>" if "<|end_header_id|>" in self.special_tokens else ""
+        self.end_header_token = cfg["end_header_token"
+                                   ] if "end_header_token" in cfg else "<|end_header_id|>" if "<|end_header_id|>" in self.special_tokens else ""
         self.end_header_id = self.special_tokens[self.end_header_token] if self.end_header_token else None
-
 
     def encode(
         self,
@@ -127,7 +133,7 @@ class Tokenizer:
         """
         return self.model.decode(t)
 
-    def apply_chat_template(self, messages: list[dict[str, str]] | str, tools:list[dict[str, Any]] | None=None) -> str:
+    def apply_chat_template(self, messages: list[dict[str, str]] | str, tools: list[dict[str, Any]] | None = None) -> str:
         if isinstance(messages, str): messages = [{"role": "user", "content": messages}]
         if self.chat_template:
             from jinja2 import Template

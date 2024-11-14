@@ -1,8 +1,9 @@
+from dataclasses import asdict
 import logging
 import math
 import os
 from pathlib import Path
-from typing import NamedTuple, Optional, Tuple
+from typing import Generator, NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -64,6 +65,15 @@ class Generation(NamedTuple):
     tokens: list[str]
     metrics: list[TokenMetrics]
     sampler_states: list[SamplerState]
+
+    def to_dict(self):
+        return {
+            "prompt": self.prompt,
+            "response": self.response,
+            "tokens": self.tokens,
+            "metrics": [asdict(m) for m in self.metrics],
+            "sampler_states": [s.name for s in self.sampler_states],
+        }
 
 ################################################################################
 #                                   Weights                                    #
@@ -240,7 +250,6 @@ def generate(
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
-    temperature: float = 1.0,
     print_stream: bool = False,
     metrics: bool = True,
 ) -> Generation:
@@ -263,7 +272,6 @@ def generate(
 
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
-        response = ""
         bs, seqlen = tokens.shape
         cur_pos = 0
 
@@ -274,15 +282,16 @@ def generate(
         next_token = tokens
         freqs_end = seqlen
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
-        gen_metrics = []
+
+        response = ""
         gen_tokens_text = []
+        gen_metrics = []
         sampler_states = []
 
-        # Generation loop
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
-            next_token, sampler_state = sample(gen_tokens, logits, scores, temperature, sampler_cfg)
+            next_token, sampler_state = sample(gen_tokens, logits, scores, sampler_cfg)
 
             if metrics:
                 gen_metrics.append(calculate_metrics(logits, scores))
@@ -303,4 +312,91 @@ def generate(
             response += token_text
         if print_stream: print()
 
-        return Generation(prompt=prompt, response=response, tokens=gen_tokens_text, metrics=gen_metrics, sampler_states=sampler_states)
+        return Generation(
+            prompt=prompt,
+            response=response,
+            tokens=gen_tokens_text,
+            metrics=gen_metrics,
+            sampler_states=sampler_states,
+        )
+
+def stream(
+    prompt: str,
+    model: Model,
+    sampler_cfg: SamplerConfig | None = None,
+    max_tokens: int | None = None,
+    metrics: bool = True,
+) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[Generation]], None, None]:
+    """
+    Stream generated text from a prompt using the transformer model.
+
+    Args:
+        prompt: Input prompt
+        model: Model to use for generation
+        sampler_cfg: Sampler configuration
+        max_tokens: Maximum number of tokens to generate
+        temperature: Sampling temperature
+        metrics: Whether to calculate and return metrics
+
+    Yields:
+        Tuple of (generated token text, token metrics, sampler state)
+    """
+    stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
+    if max_tokens is None:
+        max_tokens = model.params.max_seq_len
+    if sampler_cfg is None:
+        logging.warning("No sampler config provided, using default config")
+        sampler_cfg = SamplerConfig()
+
+    with torch.inference_mode():
+        tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
+        bs, seqlen = tokens.shape
+        cur_pos = 0
+
+        attn_mask = build_attn_mask(seqlen, cur_pos)
+        freqs_cis = precompute_freqs_cis(model.params.head_dim, model.params.max_seq_len, model.params.rope_theta, model.params.use_scaled_rope)
+        kvcache = KVCache.new(model.params.n_layers, bs, model.params.max_seq_len, model.params.n_local_kv_heads, model.params.head_dim).to(device)
+
+        next_token = tokens
+        freqs_end = seqlen
+        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
+
+        response = ""
+        gen_tokens_text = []
+        gen_metrics = []
+        sampler_states = []
+
+        while cur_pos < max_tokens:
+            attn = attn_mask if cur_pos < seqlen else None
+            logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
+            next_token, sampler_state = sample(gen_tokens, logits, scores, sampler_cfg)
+
+            if metrics:
+                token_metrics = calculate_metrics(logits, scores)
+                gen_metrics.append(token_metrics)
+                sampler_states.append(sampler_state)
+            else: 
+                token_metrics = None
+
+            cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
+            freqs_end = cur_pos + 1
+
+            gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+
+            token_text = model.tokenizer.decode([next_token.item()])  # type: ignore
+            gen_tokens_text.append(token_text)
+
+            # break after adding the stop token and its metrics to output but before adding to response text and yielding
+            if torch.isin(next_token, stop_tokens).any(): break
+
+            yield token_text, token_metrics, sampler_state, None
+
+        gen = Generation(
+            prompt=prompt,
+            response=response,
+            tokens=gen_tokens_text,
+            metrics=gen_metrics,
+            sampler_states=sampler_states,
+        )
+        yield None, token_metrics, sampler_state, gen
+

@@ -17,6 +17,13 @@ dependencies = [
     "tyro>=0.8.14",
 ]
 
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.115.5",
+    "uvicorn>=0.32.0",
+    "uvloop>=0.21.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["entropix*"]

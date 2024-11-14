@@ -94,7 +94,6 @@ def sample(
     gen_tokens: torch.Tensor,
     logits: torch.Tensor,
     attention_scores: torch.Tensor,
-    temperature: float,
     cfg: SamplerConfig,
     clarifying_question_token: int = 2564,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
