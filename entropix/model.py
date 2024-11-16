@@ -398,5 +398,5 @@ def stream(
             metrics=gen_metrics,
             sampler_states=sampler_states,
         )
-        yield None, token_metrics, sampler_state, gen
+        yield "", token_metrics, sampler_state, gen
 

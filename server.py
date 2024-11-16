@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 import time
 import json
 from functools import lru_cache
@@ -230,10 +231,11 @@ async def openai_chat_completions(request: ChatRequest, model_manager: ModelMana
     model, tokenizer = model_manager.get_model(request.model)
     prompt = tokenizer.apply_chat_template(request.messages)
     sampler_cfg = SamplerConfig(temperature=request.temperature, top_p=request.top_p)
+    save_path = os.path.expanduser(request.save_path) if request.save_path else None
     if request.stream:
-        return StreamingResponse(stream_response(prompt, model, sampler_cfg, request.save_path, request.max_completion_tokens))
+        return StreamingResponse(stream_response(prompt, model, sampler_cfg, save_path, request.max_completion_tokens))
     else:
-        return generate_response(prompt, model, sampler_cfg, request.save_path, request.max_completion_tokens)
+        return generate_response(prompt, model, sampler_cfg, save_path, request.max_completion_tokens)
 
 if __name__ == "__main__":
     import uvicorn
