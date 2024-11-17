@@ -82,6 +82,8 @@ class Generation:
         # load a json file dumped with to_dict
         with open(fp, 'rb') as f:
             data = json.load(f)
+        data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
+        data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)
 
 ################################################################################
