@@ -1,7 +1,8 @@
-from dataclasses import asdict
+import json
 import logging
 import math
 import os
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Generator, NamedTuple, Optional, Tuple
 
@@ -59,7 +60,8 @@ class Model(NamedTuple):
     params: ModelParams
     tokenizer: Tokenizer
 
-class Generation(NamedTuple):
+@dataclass
+class Generation:
     prompt: str
     response: str
     tokens: list[str]
@@ -74,6 +76,13 @@ class Generation(NamedTuple):
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_states": [s.name for s in self.sampler_states],
         }
+
+    @classmethod
+    def load(cls, fp: str):
+        # load a json file dumped with to_dict
+        with open(fp, 'rb') as f:
+            data = json.load(f)
+        return cls(**data)
 
 ################################################################################
 #                                   Weights                                    #
