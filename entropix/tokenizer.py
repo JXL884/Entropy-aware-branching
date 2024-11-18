@@ -1,5 +1,5 @@
-import os
 import json
+import os
 from pathlib import Path
 from typing import (
     AbstractSet,
@@ -13,12 +13,38 @@ from typing import (
     Sequence,
     Union,
 )
-
+from pydantic import BaseModel, model_validator
+from typing_extensions import Self
 from transformers import PreTrainedTokenizerFast
 
 # The following constants remain unchanged
 TIKTOKEN_MAX_ENCODE_CHARS = 400_000
 MAX_NO_WHITESPACES_CHARS = 25_000
+
+
+class Message(BaseModel):
+    class ToolCallFunction(BaseModel):
+        name: str
+        arguments: str
+
+    class ToolCall(BaseModel):
+        id: str
+        type: str  # only "function" is currently supported in openai api
+        function: "Message.ToolCallFunction"
+
+    content: str | list[str]
+    role: Literal["system", "user", "assistant", "tool"]
+    name: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+
+    @model_validator(mode='after')
+    def validate_role_restricted_params(self) -> Self:
+        if self.role != "assistant" and self.tool_calls is not None:
+            raise ValueError("Only assistant messages can have tool_calls")
+        elif self.role == "tool" and self.tool_call_id is None:
+            raise ValueError("Tool messages must have a tool_call_id")
+        return self
 
 class Tokenizer:
     """
@@ -133,8 +159,8 @@ class Tokenizer:
         """
         return self.model.decode(t)
 
-    def apply_chat_template(self, messages: list[dict[str, str]] | str, tools: list[dict[str, Any]] | None = None) -> str:
-        if isinstance(messages, str): messages = [{"role": "user", "content": messages}]
+    def apply_chat_template(self, messages: list[Message] | str, tools: list[dict[str, Any]] | None = None) -> str:
+        if isinstance(messages, str): messages = [Message(role="user", content=messages)]
         if self.chat_template:
             from jinja2 import Template
             template = Template(self.chat_template)
@@ -142,7 +168,7 @@ class Tokenizer:
         else:
             out = f"{self.bos_token}"
             for message in messages:
-                out += f"{self.start_header_token}{message['role']}{self.end_header_token}\n{message['content']}{self.eot_token}"
+                out += f"{self.start_header_token}{message.role}{self.end_header_token}\n{message.content}{self.eot_token}"
             out += f"{self.start_header_token}assistant{self.end_header_token}\n"
             return out
 

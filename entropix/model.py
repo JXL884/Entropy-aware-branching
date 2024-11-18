@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Generator, NamedTuple, Optional, Tuple
+from typing import Generator, Literal, NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -15,7 +15,7 @@ from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState
 from entropix.kvcache import KVCache
 from entropix.sampler import sample
 from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
-from entropix.tokenizer import Tokenizer
+from entropix.tokenizer import Tokenizer, Message
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -65,6 +65,7 @@ class GenerationData:
     prompt: str
     response: str
     tokens: list[str]
+    messages: list[Message]
     metrics: list[TokenMetrics]
     sampler_cfg: SamplerConfig
     sampler_states: list[SamplerState]
@@ -260,29 +261,46 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
     return mask
 
 def generate(
-    prompt: str,
+    messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     print_stream: bool = False,
     metrics: bool = True,
+    apply_chat_template: bool = True,
 ) -> GenerationData:
     """
-    Generate text from a prompt using the transformer model.
+    Generate text using the transformer model.
 
     Args:
-        prompt: Input prompt
+        messages: Input messages or a string prompt
         model: Model to use for generation
-        tokenizer: Tokenizer to use for tokenization
+        sampler_cfg: Sampler configuration
+        max_tokens: Maximum number of tokens to generate
+        print_stream: Optional, default False. Flag to print the generated tokens to the console
+        metrics: Optional, default True. Flag to calculate and return entropy metrics
+        apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
 
     Returns:
-        Generated text string
+        GenerationData: A dataclass containing the generated text, tokens, messages, metrics, sampler configuration, and sampler states
     """
     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
     if max_tokens is None: max_tokens = model.params.max_seq_len
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
+
+    if isinstance(messages, str):
+        prompt = messages
+        messages = [Message(role="system", content=prompt)]
+        logging.warning("entropix.model.generate: prompt passed as a string, cannot save messages to output GenerationData.")
+    elif isinstance(messages, list) and isinstance(messages[0], dict): # convert list[dict] to list[Message] so all messages are validated
+        messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
+
+    assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
+    messages: list[Message] = messages  # type: ignore
+    if apply_chat_template:
+        prompt = model.tokenizer.apply_chat_template(messages)
 
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
@@ -326,35 +344,40 @@ def generate(
             response += token_text
         if print_stream: print()
 
+        messages.append(Message(role="assistant", content=response))
         return GenerationData(
             prompt=prompt,
             response=response,
             tokens=gen_tokens_text,
+            messages=messages,
             metrics=gen_metrics,
             sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
         )
 
 def stream(
-    prompt: str,
+    messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
+    print_stream: bool = False,
     metrics: bool = True,
+    apply_chat_template: bool = True,
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
-    Stream generated text from a prompt using the transformer model.
+    Stream generated text using the transformer model.
 
     Args:
-        prompt: Input prompt
+        messages: Input messages or a string prompt
         model: Model to use for generation
         sampler_cfg: Sampler configuration
         max_tokens: Maximum number of tokens to generate
-        temperature: Sampling temperature
-        metrics: Whether to calculate and return metrics
+        print_stream: Optional, default False. Flag to print the generated tokens to the console
+        metrics: Optional, default True. Flag to calculate and return entropy metrics
+        apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
 
     Yields:
-        Tuple of (generated token text, token metrics, sampler state)
+        Tuple of (generated token text, token metrics, sampler state, complete Generation object (at the last token only))
     """
     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
     if max_tokens is None:
@@ -362,6 +385,18 @@ def stream(
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
+
+    if isinstance(messages, str):
+        prompt = messages
+        messages = [Message(role="system", content=prompt)]
+        logging.warning("entropix.model.generate: prompt passed as a string, cannot save messages to output GenerationData.")
+    elif isinstance(messages, list) and isinstance(messages[0], dict): # convert list[dict] to list[Message] so all messages are validated
+        messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
+
+    assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
+    messages: list[Message] = messages  # type: ignore
+    if apply_chat_template:
+        prompt = model.tokenizer.apply_chat_template(messages)
 
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
@@ -390,7 +425,7 @@ def stream(
                 token_metrics = calculate_metrics(logits, scores)
                 gen_metrics.append(token_metrics)
                 sampler_states.append(sampler_state)
-            else: 
+            else:
                 token_metrics = None
 
             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
@@ -406,13 +441,14 @@ def stream(
 
             yield token_text, token_metrics, sampler_state, None
 
+        messages.append(Message(role="assistant", content=response))
         gen = GenerationData(
             prompt=prompt,
             response=response,
             tokens=gen_tokens_text,
+            messages=messages,
             metrics=gen_metrics,
             sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
         )
         yield "", token_metrics, sampler_state, gen
-

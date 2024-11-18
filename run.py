@@ -2,7 +2,7 @@ from entropix.config import SamplerConfig
 from entropix.models import LLAMA_1B, SMOLLM_360M, download_weights
 from entropix.model import load_weights, generate, Model
 from entropix.tokenizer import Tokenizer
-from entropix.plot import plot_entropy, plot_sampler
+from entropix.plot import plot3d, plot2d
 
 messages = [
     {"role": "system", "content": "You are a super intelligent assistant."},
@@ -31,16 +31,10 @@ for model_params in (LLAMA_1B, SMOLLM_360M):
     weights = load_weights(weights_path, model_params)
     model = Model(weights, model_params, tokenizer)
 
-    # Don't forget to apply the chat template if using an instruct model
-    prompt = tokenizer.apply_chat_template(messages)
-    # print("\n--- Full input prompt ---")
-    # print(prompt)
-    # print("-------------------------\n")
-
     print(f"\nUSER: {messages[1]['content']}")
 
-    gen_data = generate(prompt, model, sampler_cfg, print_stream=True)
+    gen_data = generate(messages, model, sampler_cfg, print_stream=True)
 
     print()
-    plot_sampler(gen_data, out=f"{model_params.name}_sampler_plot.html")
-    plot_entropy(gen_data, sampler_cfg, out=f"{model_params.name}_entropy_plot.html")
+    plot2d(gen_data, out=f"{model_params.name}_sampler_plot.html")
+    plot3d(gen_data, out=f"{model_params.name}_entropy_plot.html")
