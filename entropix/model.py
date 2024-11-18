@@ -84,7 +84,6 @@ class GenerationData:
     def save(self, fp: str):
         with open(fp, "w") as f:
             s = json.dumps(self.to_dict())
-            print(s)
             f.write(s)
 
     @classmethod
