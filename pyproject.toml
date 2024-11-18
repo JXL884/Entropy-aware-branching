@@ -19,6 +19,8 @@ dependencies = [
 
 [project.optional-dependencies]
 server = [
+    "dash-bootstrap-components>=1.6.0",
+    "dash>=2.18.2",
     "fastapi>=0.115.5",
     "uvicorn>=0.32.0",
     "uvloop>=0.21.0",
