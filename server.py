@@ -5,21 +5,20 @@ import json
 from functools import lru_cache
 import logging
 from pathlib import Path
-from typing import Generator, Literal
+from typing import Generator
 import uuid
-from typing_extensions import Self
 
 import torch
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator
 import asyncio
 import uvloop
 from entropix.config import SamplerConfig
 from entropix.models import LLAMA_1B, SMOLLM_360M
 from entropix.model import generate, load_weights, Model, stream
-from entropix.tokenizer import Tokenizer
+from entropix.tokenizer import Tokenizer, Message
 
 model_map = {
     "llama-1b": LLAMA_1B,
@@ -40,29 +39,6 @@ class ServerArgs(BaseModel):
         if self.tokenizer is None: self.tokenizer = Path(f"weights/tokenizers/{self.model}.json")
         elif isinstance(self.tokenizer, str): self.tokenizer = Path(self.tokenizer)
 
-class Message(BaseModel):
-    class ToolCallFunction(BaseModel):
-        name: str
-        arguments: str
-
-    class ToolCall(BaseModel):
-        id: str
-        type: str  # only "function" is currently supported in openai api
-        function: "Message.ToolCallFunction"
-
-    content: str | list[str]
-    role: Literal["system", "user", "assistant", "tool"]
-    name: str | None = None
-    tool_calls: list[ToolCall] | None = None
-    tool_call_id: str | None = None
-
-    @model_validator(mode='after')
-    def validate_role_restricted_params(self) -> Self:
-        if self.role != "assistant" and self.tool_calls is not None:
-            raise ValueError("Only assistant messages can have tool_calls")
-        elif self.role == "tool" and self.tool_call_id is None:
-            raise ValueError("Tool messages must have a tool_call_id")
-        return self
 
 class ChatRequest(BaseModel):
     # https://platform.openai.com/docs/api-reference/chat
@@ -116,7 +92,6 @@ class ModelManager:
         self.weights_path = "weights"  # NOTE: hardcoded
         self.tokenizer_path = "weights/tokenizers"  # NOTE: hardcoded
         self.model = None
-        self.tokenizer = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._load_model(model_name)
 
@@ -126,15 +101,15 @@ class ModelManager:
             if torch.cuda.is_available(): torch.cuda.empty_cache()
 
         model_params = model_map[model_name]
-        self.tokenizer = Tokenizer(f"{self.tokenizer_path}/{model_params.name}.json")
+        tokenizer = Tokenizer(f"{self.tokenizer_path}/{model_params.name}.json")
         weights = load_weights(f"{self.weights_path}/{model_params.name}", model_params)
-        self.model = Model(weights, model_params, self.tokenizer)
+        self.model = Model(weights, model_params, tokenizer)
 
     def get_model(self, requested_model: str | None = None):
         if (requested_model is not None and self.model is not None and requested_model != self.model.params.name):
             self._load_model(requested_model)
-        assert self.model is not None and self.tokenizer is not None
-        return self.model, self.tokenizer
+        assert self.model is not None
+        return self.model
 
 _model_manager: ModelManager | None = None
 
@@ -172,10 +147,10 @@ app.add_middleware(
 async def health() -> Response:
     return Response(status_code=200)
 
-def generate_response(prompt: str, model: Model, sampler_cfg: SamplerConfig, save_path: str | None, max_tokens: int | None) -> JSONResponse:
+def generate_response(messages: list[Message], model: Model, sampler_cfg: SamplerConfig, save_path: str | None, max_tokens: int | None) -> JSONResponse:
     uid = str(uuid.uuid4())
     created_at = int(time.time())
-    gen = generate(prompt, model, sampler_cfg, max_tokens=max_tokens)
+    gen = generate(messages, model, sampler_cfg, max_tokens=max_tokens)
     # NOTE: only one choice
     choices = [{"index": 0, "message": {"role": "assistant", "content": gen.response}, "finish_reason": "stop"}]
     if save_path:
@@ -197,11 +172,11 @@ def generate_response(prompt: str, model: Model, sampler_cfg: SamplerConfig, sav
         )
     )
 
-def stream_response(prompt: str, model: Model, sampler_cfg: SamplerConfig, save_path: str | None, max_tokens: int | None) -> Generator[str, None, None]:
+def stream_response(messages: list[Message], model: Model, sampler_cfg: SamplerConfig, save_path: str | None, max_tokens: int | None) -> Generator[str, None, None]:
     uid = str(uuid.uuid4())
     created_at = int(time.time())
 
-    for token, token_metrics, sampler_state, gen in stream(prompt, model, sampler_cfg, max_tokens=max_tokens):
+    for token, token_metrics, sampler_state, gen in stream(messages, model, sampler_cfg, max_tokens=max_tokens):
         choices = [
             dict(
                 index=0,
@@ -227,15 +202,13 @@ def stream_response(prompt: str, model: Model, sampler_cfg: SamplerConfig, save_
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: ChatRequest, model_manager: ModelManager = Depends(get_model_manager)):
-    # logging.info(f"{request}")
-    model, tokenizer = model_manager.get_model(request.model)
-    prompt = tokenizer.apply_chat_template(request.messages)
+    model = model_manager.get_model(request.model)
     sampler_cfg = SamplerConfig(temperature=request.temperature, top_p=request.top_p)
     save_path = os.path.expanduser(request.save_path) if request.save_path else None
     if request.stream:
-        return StreamingResponse(stream_response(prompt, model, sampler_cfg, save_path, request.max_completion_tokens))
+        return StreamingResponse(stream_response(request.messages, model, sampler_cfg, save_path, request.max_completion_tokens))
     else:
-        return generate_response(prompt, model, sampler_cfg, save_path, request.max_completion_tokens)
+        return generate_response(request.messages, model, sampler_cfg, save_path, request.max_completion_tokens)
 
 if __name__ == "__main__":
     import uvicorn

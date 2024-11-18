@@ -35,6 +35,8 @@ for model_params in (LLAMA_1B, SMOLLM_360M):
 
     gen_data = generate(messages, model, sampler_cfg, print_stream=True)
 
+    gen_data.save(f"{model_params.name}_gen_data.json")
+
     print()
-    plot2d(gen_data, out=f"{model_params.name}_sampler_plot.html")
-    plot3d(gen_data, out=f"{model_params.name}_entropy_plot.html")
+    plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
+    plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")

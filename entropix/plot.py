@@ -86,7 +86,7 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
     if out:
         if not out.endswith(".html"): out += ".html"
         fig.write_html(out, include_plotlyjs=True, full_html=True)
-        print(f"Sampler metrics visualization saved to {out}")
+        print(f"2D visualization saved to {out}")
 
     return fig
 
@@ -364,6 +364,6 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
         if not out.endswith(".html"):
             out += ".html"
         fig.write_html(out, include_plotlyjs=True, full_html=True)
-        print(f"Entropy plot saved to {out}")
+        print(f"3D visualization saved to {out}")
 
     return fig

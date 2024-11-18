@@ -80,6 +80,10 @@ class GenerationData:
             "sampler_states": [s.name for s in self.sampler_states],
         }
 
+    def save(self, fp: str):
+        with open(fp, "w") as f:
+            f.write(json.dumps(self.to_dict()))
+
     @classmethod
     def load(cls, fp: str):
         # load a json file dumped with to_dict
@@ -261,7 +265,7 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
     return mask
 
 def generate(
-    messages: list[Message] | list[dict[str, str]] | str,
+    messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
@@ -356,7 +360,7 @@ def generate(
         )
 
 def stream(
-    messages: list[Message] | list[dict[str, str]] | str,
+    messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
