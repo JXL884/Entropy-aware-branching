@@ -212,7 +212,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filena
 
     # Generate plots using your existing functions
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
-    sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))
+    sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
     # entropy_fig = plot_entropy(generation_data, sampler_config, out=None)
 
     entropy_fig = plot_entropy(generation_data, sampler_config, out=None)
@@ -236,8 +236,8 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filena
     # Attention varentropy thresholds [13:16]
     visibility.extend([("show_attention_varentropy" in attn_controls and "show_attention" in attn_controls)] * 3)
     for i, vis in enumerate(visibility):
-        if i < len(entropy_fig.data):
-            entropy_fig.data[i].visible = vis
+        if i < len(entropy_fig.data):  # type: ignore
+            entropy_fig.data[i].visible = vis  # type: ignore
 
     # Format tokens with inline CSS styles
     tokens_html = []
