@@ -8,7 +8,7 @@ from datetime import datetime
 from entropix.config import SamplerConfig, SamplerState
 from entropix.model import Generation
 
-def plot_sampler(generation_data: Generation, out: str | None):
+def plot_sampler(generation_data: Generation, out: str | None = None, max_tokens: int = 100, show_labels=True):
     # Create a plotly figure with subplots
     fig = go.Figure()
 
@@ -94,12 +94,12 @@ def plot_sampler(generation_data: Generation, out: str | None):
         # xaxis=dict(title='Generation Step', showticklabels=True, tickmode='linear', dtick=5),
         xaxis=dict(
             title='Token',
-            showticklabels=True,
+            showticklabels=show_labels,
             tickmode='array',
             ticktext=tokens,
             tickvals=list(range(len(tokens))),
             tickangle=45,  # Angle the text to prevent overlap
-            range=[0, min(len(tokens), 150)]  # Add this line to limit initial x-axis range
+            range=[0, min(len(tokens), max_tokens)]  # Add this line to limit initial x-axis range
         ),
         yaxis=dict(title='Value', domain=[0.4, 0.95]),
         yaxis2=dict(domain=[0.1, 0.2], showticklabels=False, range=[-0.5, 0.5]),
@@ -109,54 +109,13 @@ def plot_sampler(generation_data: Generation, out: str | None):
         hovermode='x',
     )
 
-    # Add tokens
-    formatted_text = ""
-    line_length = 0
-    max_line_length = 180  #some longer prompt overflow for some reason, keep it 270 for now
-
-    for token, state in zip(tokens, sampler_states):
-        color = colors[state]
-        token_text = f"<span style='color: {color}'>{token}</span> "
-
-        # Add newline if current line would be too long
-        if line_length + len(token) > max_line_length:
-            formatted_text += "<br>"
-            line_length = 0
-
-        formatted_text += token_text
-        line_length += len(token) + 1  # +1 for the space
-
-    # # Add the text
-    # fig.add_annotation(
-    #     text=formatted_text,
-    #     xref="paper",
-    #     yref="paper",
-    #     x=0,
-    #     y=0.07,
-    #     showarrow=False,
-    #     font=dict(size=20),
-    #     align="left",
-    #     xanchor="left",
-    #     yanchor="top",
-    #     xshift=5,
-    #     yshift=0,
-    #     bordercolor="gray",
-    #     borderwidth=0,
-    # )
-
-    # num_lines = formatted_text.count('<br>') + 1
-    # bottom_margin = max(30, num_lines * 15)
-
-    # fig.update_layout(margin=dict(b=bottom_margin), yaxis=dict(domain=[0.25, 0.95]), yaxis2=dict(domain=[0.1, 0.2]))
-
-    if not out:
+    if out:
         # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # out = f"sampler_metrics_{timestamp}.html"
-        return fig
-    elif not out.endswith(".html"):
-        out += ".html"
-    fig.write_html(out, include_plotlyjs=True, full_html=True)
-    print(f"Sampler metrics visualization saved to {out}")
+        if not out.endswith(".html"):
+            out += ".html"
+        fig.write_html(out, include_plotlyjs=True, full_html=True)
+        print(f"Sampler metrics visualization saved to {out}")
 
     return fig
 
@@ -200,7 +159,7 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         mode='lines',
         line=dict(color='rgba(100,40,120,0.5)', width=2),
         name='Logits',
-        visible=False,
+        visible=True,
     )
     varentropy_lines = go.Scatter3d(
         x=positions,
@@ -251,7 +210,8 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
             ),
             text=hover_text,
             hoverinfo='text',
-            name='Attention Entropy/Varentropy'
+            name='Attention Entropy/Varentropy',
+            visible=False,
         )
     )
 
@@ -433,71 +393,17 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
                     ),
                 ],
             ),
-            dict(
-                type="dropdown",
-                direction="down",
-                x=0.0,
-                y=1.08,
-                xanchor='left',
-                yanchor='top',
-                pad={"r": 10, "t": 10},
-                buttons=[
-                    # visible = [logit lines, attention lines, logits points, attention points, ...3 logits entropy thresholds, ...3 logits varentropy thresholds, ...3 attention entropy thresholds, ...3 attention varentropy thresholds]
-                    dict(label="Points", method="update", args=[{"visible": [False, False, True, True] + [False] * (len(fig.data) - 4)}]),
-                    dict(label="Lines", method="update", args=[{"visible": [True, True, True, True] + [False] * (len(fig.data) - 4)}]),
-                    dict(label="Logits", method="update", args=[{"visible": [False, False, True, False] + [False] * (len(fig.data) - 4)}]),
-                    dict(
-                        label="Logits + Entropy Thresholds",
-                        method="update",
-                        #] + [i < 3 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [True, False, True, False, True, True, True, False, False, False] + [False] * 6}],
-                    ),
-                    dict(
-                        label="Logits + Varentropy Thresholds",
-                        method="update",
-                        # args=[{"visible": [True, False, True, False] + [3 <= i < 6 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [True, False, True, False, False, False, False, True, True, True] + [False] * 6}],
-                    ),
-                    dict(
-                        label="Logits + All Thresholds",
-                        method="update",
-                        # args=[{"visible": [True, False, True, False] + [i < 6 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [True, False, True, False, True, True, True, True, True, True] + [False] * 6}],
-                    ),
-                    dict(label="Attention", method="update", args=[{"visible": [False, False, False, True] + [False] * (len(fig.data) - 4)}]),
-                    dict(
-                        label="Attention + Entropy Thresholds",
-                        method="update",
-                        # args=[{"visible": [False, True, False, True] + [6 <= i < 9 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [False, True, False, True] + [False] * 6 + [True, True, True, False, False, False]}],
-                    ),
-                    dict(
-                        label="Attention + Varentropy Thresholds",
-                        method="update",
-                        # args=[{"visible": [False, True, False, True] + [9 <= i < 12 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [False, True, False, True] + [False] * 6 + [False, False, False, True, True, True]}],
-                    ),
-                    dict(
-                        label="Attention + All Thresholds",
-                        method="update",
-                        # args=[{"visible": [False, True, False, True] + [i >= 6 for i in range(len(fig.data) - 4)]}]
-                        args=[{"visible": [False, True, False, True] + [False] * 6 + [True] * 6}],
-                    ),
-                    dict(label="All", method="update", args=[{"visible": [True] * len(fig.data)}]),
-                ],
-            )
         ],
         autosize=True,
         legend=dict(x=0.02, y=0.98, xanchor='left', yanchor='top'),
     )
 
-    if not out:
+    if out:
         # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # out = f"entropy_plot_{timestamp}.html"
-        return fig
-    elif not out.endswith(".html"):
-        out += ".html"
-    fig.write_html(out, include_plotlyjs=True, full_html=True)
-    print(f"Entropy plot saved to {out}")
+        if not out.endswith(".html"):
+            out += ".html"
+        fig.write_html(out, include_plotlyjs=True, full_html=True)
+        print(f"Entropy plot saved to {out}")
 
     return fig
