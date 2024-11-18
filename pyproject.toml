@@ -15,10 +15,6 @@ dependencies = [
     "torch>=2.5.1",
     "transformers>=4.46.1",
     "tyro>=0.8.14",
-]
-
-[project.optional-dependencies]
-server = [
     "dash-bootstrap-components>=1.6.0",
     "dash>=2.18.2",
     "fastapi>=0.115.5",
