@@ -26,6 +26,11 @@ server = [
     "uvloop>=0.21.0",
 ]
 
+[project.scripts]
+entropix-dashboard = "entropix.dashboard:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["entropix*"]
+
+

@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+import tyro
 from pathlib import Path
 import dash
 from dash import html, dcc, callback, Input, Output, State
@@ -9,7 +11,9 @@ from entropix.config import SamplerConfig, SamplerState
 # Import your existing plot functions
 from entropix.plot import plot_sampler, plot_entropy
 
+
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+default_file = None
 
 app.layout = html.Div(
     [
@@ -197,12 +201,13 @@ def toggle_collapse(n_clicks, is_open):
     State("upload-data", "filename"),
 )
 def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filename):
-    if filename is None:
-        # return dash.no_update, dash.no_update, "No file selected"
-        filename = "test.json"
+    if filename is None and default_file is None:
+        return dash.no_update, dash.no_update, "No file selected"
+
+    filename = filename or default_file
+    assert filename is not None
 
     generation_data = Generation.load(filename)
-    print(generation_data)
     sampler_config = SamplerConfig()  # Use default config or load from data if available
 
     # Generate plots using your existing functions
@@ -260,5 +265,17 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filena
         }
     )
 
+@dataclass
+class DashboardConfig:
+    file: str | None = None
+    port: int = 8050
+    host: str = '0.0.0.0'
+    debug: bool = True
+
+def main(cfg: DashboardConfig = tyro.cli(DashboardConfig)):
+    global default_file  # Add at top of file: default_file = None
+    default_file = cfg.file
+    app.run_server(debug=cfg.debug, host=cfg.host, port=cfg.port)
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    main()
