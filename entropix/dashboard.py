@@ -13,12 +13,12 @@ from entropix.config import SamplerConfig, SamplerState
 # Import your existing plot functions
 from entropix.plot import plot_sampler, plot_entropy
 
-
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 default_file = None
 
 app.layout = html.Div(
     [
+        dcc.Store(id='stored-data', storage_type='local'),  # store loaded file
         dbc.Container(
             [
                 dbc.Row(
@@ -109,12 +109,7 @@ app.layout = html.Div(
                 dbc.Row([
                     dbc.Col(
                         [
-                            dcc.Graph(
-                                id="sampler-plot",
-                                style={
-                                    "height": "600px",
-                                },
-                            ),
+                            dcc.Graph(id="sampler-plot", style={"height": "600px"}),
                         ],
                         width=12,
                     ),
@@ -161,22 +156,24 @@ app.layout = html.Div(
                             ]
                         ),
                     ],
-                    style={'backgroundColor': '#f8f9fa', 'padding': '20px', 'borderRadius': '5px', 'marginTop': '135px'}
+                    style={'backgroundColor': '#f8f9fa', 'padding': '20px', 'borderRadius': '5px'}
                 ),
-                dbc.Row([
-                    dbc.Col(
-                        [
-                            dcc.Graph(
-                                id="entropy-plot",
-                                style={
-                                    "height": "800px",
-                                    "margin": "50px 5% 5% 5%",
-                                },
-                            ),
-                        ],
-                        width=12,
-                    ),
-                ]),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="entropy-plot", style={
+                                    "height": "60vw",
+                                    "margin": "0 5% 0 5%",
+                                    "padding": "0 5px 0 5px",
+                                    "borderLeft": "1px solid #ddd",
+                                    "borderRight": "1px solid #ddd",
+                                }),
+                            ],
+                            width=12,
+                        ),
+                    ]
+                ),
             ],
             fluid=True,
         )
@@ -194,30 +191,51 @@ def toggle_collapse(n_clicks, is_open):
     return is_open
 
 @callback(
-    [Output("sampler-plot", "figure"), Output("entropy-plot", "figure"),
-     Output("tokens-text", "children")],
-    [Input("max-tokens-slider", "value"),
-     Input("show-labels-toggle", "value"),
-     Input("logits-controls", "value"),
-     Input("attention-controls", "value"),
-     Input("upload-data", "contents")],
+    [Output("sampler-plot", "figure"),
+     Output("entropy-plot", "figure"),
+     Output("tokens-text", "children"),
+     Output("stored-data", "data")],
+    [
+        Input("max-tokens-slider", "value"),
+        Input("show-labels-toggle", "value"),
+        Input("logits-controls", "value"),
+        Input("attention-controls", "value"),
+        Input("upload-data", "contents"),
+        Input("stored-data", "data")
+    ],
 )
-def update_plots(max_tokens, show_labels, logits_controls, attn_controls, contents):
-    if contents is None and default_file is None:
-        return dash.no_update, dash.no_update, "No file selected"
-    elif contents is not None:
-        filename = os.path.join(os.getcwd(), "tmp.json")
-        with open(filename, "w") as f:
-            content_type, content_string = contents.split(',') # noqa: F841
-            decoded = base64.b64decode(content_string)
-            f.write(decoded.decode('utf-8'))
+def update_plots(max_tokens, show_labels, logits_controls, attn_controls, contents, stored_data):
+    if contents is not None:
+        file_data = contents
+    elif stored_data is not None:
+        file_data = stored_data
+    elif default_file is not None:
+        with open(default_file, 'r') as f:
+            file_data = 'data:application/json;base64,' + base64.b64encode(f.read().encode()).decode()
+    else:
+        return dash.no_update, dash.no_update, "No file selected", None
 
-    filename = filename or default_file
-    assert filename is not None
+    #     return dash.no_update, dash.no_update, "No file selected"
+    # elif contents is not None:
+    #     filename = os.path.join(os.getcwd(), "tmp.json")
+    #     with open(filename, "w") as f:
+    #         content_type, content_string = contents.split(',') # noqa: F841
+    #         decoded = base64.b64decode(content_string)
+    #         f.write(decoded.decode('utf-8'))
+
+    filename = os.path.join(os.getcwd(), "tmp.json")
+    content_type, content_string = file_data.split(',')
+    decoded = base64.b64decode(content_string)
+    with open(filename, 'w') as f:
+        f.write(decoded.decode('utf-8'))
+
+    # filename = filename or default_file
+    # assert filename is not None
 
     generation_data = Generation.load(filename)
     print("loaded generation data")
-    if filename != default_file: os.remove(filename)
+    os.remove(filename)  # cleanup
+
     sampler_config = SamplerConfig()  # TODO: load sampler in gen data
 
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
@@ -259,7 +277,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
 
         tokens_html.append(html.Span(token + ' ', style={'color': color}))  # type: ignore
 
-    return sampler_fig, entropy_fig, html.Div(
+    tokens_div = html.Div(
         tokens_html,
         style={
             'whiteSpace': 'pre-wrap',
@@ -271,6 +289,8 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
             'marginBottom': '20px',
         }
     )
+
+    return sampler_fig, entropy_fig, tokens_div, file_data
 
 @dataclass
 class DashboardConfig:

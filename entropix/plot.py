@@ -103,7 +103,7 @@ def plot_sampler(generation_data: Generation, out: str | None = None, max_tokens
         ),
         yaxis=dict(title='Value', domain=[0.4, 0.95]),
         yaxis2=dict(domain=[0.1, 0.2], showticklabels=False, range=[-0.5, 0.5]),
-        height=750,
+        # height=750,
         showlegend=True,
         legend=dict(yanchor="bottom", y=1.02, xanchor="right", x=1, orientation="h"),
         hovermode='x',
