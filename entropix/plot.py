@@ -9,7 +9,6 @@ from entropix.config import SamplerConfig, SamplerState
 from entropix.model import GenerationData
 
 def plot_sampler(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
-    # Create a plotly figure with subplots
     fig = go.Figure()
 
     tokens = generation_data.tokens
@@ -17,103 +16,75 @@ def plot_sampler(generation_data: GenerationData, out: str | None = None, max_to
     varentropies = np.array([token_metrics.logits_varentropy for token_metrics in generation_data.metrics])
     sampler_states = generation_data.sampler_states
 
-    # Create unified hover text
-    # hover_template = ("Step: %{x}<br>" + "Value: %{y}<br>" + "Token: %{customdata[0]}<br>" + "State: %{customdata[1]}")
-
-    # Add entropy trace
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(len(entropies))),
-            y=entropies,
-            name='Entropy',
-            line=dict(color='blue'),
-            yaxis='y1',
-            # customdata=list(zip(tokens if tokens else [''] * len(entropies), [state.value for state in sampler_states])),
-            # hovertemplate=hover_template
+    thresholds = [
+        # Entropy thresholds (blue)
+        (generation_data.sampler_cfg.low_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'Low Entropy'),
+        (generation_data.sampler_cfg.medium_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
+        (generation_data.sampler_cfg.high_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'High Entropy'),
+        # Varentropy thresholds (red)
+        (generation_data.sampler_cfg.low_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
+        (generation_data.sampler_cfg.medium_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
+        (generation_data.sampler_cfg.high_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'High Varentropy'),
+    ]
+    for threshold, color, name in thresholds:
+        fig.add_trace(
+            go.Scatter(
+                x=[0, len(tokens)],
+                y=[threshold, threshold],
+                mode='lines',
+                line=dict(color=color, dash='dash', width=1),
+                name=name,
+                visible='legendonly'  # Hidden by default
+            )
         )
-    )
 
-    # Add varentropy trace
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(len(varentropies))),
-            y=varentropies,
-            name='Varentropy',
-            line=dict(color='red'),
-            yaxis='y1',
-            # customdata=list(zip(tokens if tokens else [''] * len(varentropies), [state.value for state in sampler_states])),
-            # hovertemplate=hover_template
-        )
-    )
+    # Main traces
+    fig.add_trace(go.Scatter(name='Entropy', line=dict(color='blue'), x=list(range(len(entropies))), y=entropies, yaxis='y1'))
+    fig.add_trace(go.Scatter(name='Varentropy', line=dict(color='red'), x=list(range(len(varentropies))), y=varentropies, yaxis='y1'))
 
-    # Define colors for sampler states
+    # Sampler states
     colors = {
         SamplerState.FLOWING: 'lightblue', SamplerState.TREADING: 'lightgreen', SamplerState.EXPLORING: 'orange', SamplerState.RESAMPLING: 'pink',
         SamplerState.ADAPTIVE: 'purple'
     }
     state_colors = [colors[state] for state in sampler_states]
     state_names = [state.value for state in sampler_states]
-    # Add state indicators
     fig.add_trace(
         go.Scatter(
             x=list(range(len(sampler_states))),
             y=[0] * len(sampler_states),
             mode='markers',
-            marker=dict(
-                color=state_colors,
-                size=20,
-                symbol='square',
-            ),
+            marker=dict(color=state_colors, size=20, symbol='square'),
             customdata=list(zip(tokens if tokens else [''] * len(sampler_states), state_names)),
-            # hovertemplate=hover_template,
-            hovertemplate='%{customdata[1]}<extra></extra>',  # Modified this line
+            hovertemplate='%{customdata[1]}<extra></extra>',
             yaxis='y2',
-            showlegend=False,
+            showlegend=False
         )
     )
-    # Add state legend
+    # Custom legend
     for state, color in colors.items():
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode='markers',
-                marker=dict(
-                    color=color,
-                    size=10,
-                    symbol='square',
-                ),
-                name=state.value,
-                showlegend=True,
-            )
-        )
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color=color, size=10, symbol='square'), name=state.value, showlegend=True))
 
     # Update layout
     fig.update_layout(
-        # title='Entropy, Varentropy and Sampler States over Generation Steps',
-        # xaxis=dict(title='Generation Step', showticklabels=True, tickmode='linear', dtick=5),
         xaxis=dict(
             title='Token',
             showticklabels=show_labels,
             tickmode='array',
             ticktext=tokens,
             tickvals=list(range(len(tokens))),
-            tickangle=45,  # Angle the text to prevent overlap
-            range=[0, min(len(tokens), max_tokens)]  # Add this line to limit initial x-axis range
+            tickangle=45,
+            range=[0, min(len(tokens), max_tokens)]
         ),
         yaxis=dict(title='Value', domain=[0.4, 0.95]),
         yaxis2=dict(domain=[0.1, 0.2], showticklabels=False, range=[-0.5, 0.5]),
-        # height=750,
         showlegend=True,
         legend=dict(yanchor="bottom", y=1.02, xanchor="right", x=1, orientation="h"),
         hovermode='x',
     )
 
     if out:
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # out = f"sampler_metrics_{timestamp}.html"
-        if not out.endswith(".html"):
-            out += ".html"
+        if not out.endswith(".html"): out += ".html"
         fig.write_html(out, include_plotlyjs=True, full_html=True)
         print(f"Sampler metrics visualization saved to {out}")
 
@@ -216,18 +187,11 @@ def plot_entropy(generation_data: GenerationData, out: str | None = None):
     )
 
     # Calculate the limits for x, y, and z
-
     x_min, x_max = min(positions), max(positions)
     logits_y_min, logits_y_max = min(varentropies), max(varentropies)
     logits_z_min, logits_z_max = min(entropies), max(entropies)
     attention_y_min, attention_y_max = min(attn_varentropies), max(attn_varentropies)
     attention_z_min, attention_z_max = min(attn_entropies), max(attn_entropies)
-
-    # logits_x_min, logits_x_max = min(entropies), max(entropies)
-    # logits_y_min, logits_y_max = min(varentropies), max(varentropies)
-    # attention_x_min, attention_x_max = min(attn_entropies), max(attn_entropies)
-    # attention_y_min, attention_y_max = min(attn_varentropies), max(attn_varentropies)
-    # z_min, z_max = min(positions), max(positions)
 
     # Function to create threshold planes
     def create_threshold_plane(threshold, axis, color, name, data_type):
@@ -269,7 +233,6 @@ def plot_entropy(generation_data: GenerationData, out: str | None = None):
                 name=name,
                 visible=False
             )
-            # Add threshold planes
 
     thresholds = [
         (
@@ -320,7 +283,6 @@ def plot_entropy(generation_data: GenerationData, out: str | None = None):
             fig.add_trace(create_threshold_plane(threshold, axis, color, f'{threshold_type.replace("_", " ").title()} Threshold: {threshold}', data_type))
 
     assert isinstance(fig.data, Sized)
-    # Update layout
     fig.update_layout(
         scene=dict(
             xaxis_title='Token Position',
@@ -399,8 +361,6 @@ def plot_entropy(generation_data: GenerationData, out: str | None = None):
     )
 
     if out:
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # out = f"entropy_plot_{timestamp}.html"
         if not out.endswith(".html"):
             out += ".html"
         fig.write_html(out, include_plotlyjs=True, full_html=True)
