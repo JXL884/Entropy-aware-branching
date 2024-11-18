@@ -8,7 +8,7 @@ from datetime import datetime
 from entropix.config import SamplerConfig, SamplerState
 from entropix.model import GenerationData
 
-def plot_sampler(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
+def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
     fig = go.Figure()
 
     tokens = generation_data.tokens
@@ -90,7 +90,7 @@ def plot_sampler(generation_data: GenerationData, out: str | None = None, max_to
 
     return fig
 
-def plot_entropy(generation_data: GenerationData, out: str | None = None):
+def plot3d(generation_data: GenerationData, out: str | None = None):
     tokens = generation_data.tokens
 
     # Extract data

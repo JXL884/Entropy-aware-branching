@@ -11,7 +11,7 @@ from entropix.model import GenerationData
 from entropix.config import SamplerConfig, SamplerState
 
 # Import your existing plot functions
-from entropix.plot import plot_sampler, plot_entropy
+from entropix.plot import plot2d, plot3d
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 default_file = None
@@ -229,8 +229,8 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     os.remove(filename)  # cleanup
 
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
-    sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
-    entropy_fig = plot_entropy(generation_data)
+    sampler_fig = plot2d(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
+    entropy_fig = plot3d(generation_data)
 
     # Create visibility array based on controls
     visibility = []
