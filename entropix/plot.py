@@ -6,9 +6,9 @@ import json
 from datetime import datetime
 
 from entropix.config import SamplerConfig, SamplerState
-from entropix.model import Generation
+from entropix.model import GenerationData
 
-def plot_sampler(generation_data: Generation, out: str | None = None, max_tokens: int = 100, show_labels=True):
+def plot_sampler(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
     # Create a plotly figure with subplots
     fig = go.Figure()
 
@@ -119,7 +119,7 @@ def plot_sampler(generation_data: Generation, out: str | None = None, max_tokens
 
     return fig
 
-def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out: str | None = None):
+def plot_entropy(generation_data: GenerationData, out: str | None = None):
     tokens = generation_data.tokens
 
     # Extract data
@@ -274,32 +274,32 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     thresholds = [
         (
             'logits_entropy', 'z', [
-                (sampler_config.low_logits_entropy_threshold, 'rgba(255, 0, 0, 0.2)'),
-                (sampler_config.medium_logits_entropy_threshold, 'rgba(0, 255, 0, 0.2)'),
-                (sampler_config.high_logits_entropy_threshold, 'rgba(0, 0, 255, 0.2)'),
+                (generation_data.sampler_cfg.low_logits_entropy_threshold, 'rgba(255, 0, 0, 0.2)'),
+                (generation_data.sampler_cfg.medium_logits_entropy_threshold, 'rgba(0, 255, 0, 0.2)'),
+                (generation_data.sampler_cfg.high_logits_entropy_threshold, 'rgba(0, 0, 255, 0.2)'),
             ], 'logits'
         ),
         (
             'logits_varentropy', 'y', [
-                (sampler_config.low_logits_varentropy_threshold, 'rgba(255, 165, 0, 0.2)'),
-                (sampler_config.medium_logits_varentropy_threshold, 'rgba(165, 42, 42, 0.2)'),
-                (sampler_config.high_logits_varentropy_threshold, 'rgba(128, 0, 128, 0.2)'),
+                (generation_data.sampler_cfg.low_logits_varentropy_threshold, 'rgba(255, 165, 0, 0.2)'),
+                (generation_data.sampler_cfg.medium_logits_varentropy_threshold, 'rgba(165, 42, 42, 0.2)'),
+                (generation_data.sampler_cfg.high_logits_varentropy_threshold, 'rgba(128, 0, 128, 0.2)'),
             ], 'logits'
         ),
         (
             'attention_entropy', 'z', [
-                (sampler_config.low_attention_entropy_threshold, 'rgba(255, 192, 203, 0.2)'),
-                (sampler_config.medium_attention_entropy_threshold, 'rgba(0, 255, 255, 0.2)'),
-                (sampler_config.high_attention_entropy_threshold, 'rgba(255, 255, 0, 0.2)'),
+                (generation_data.sampler_cfg.low_attention_entropy_threshold, 'rgba(255, 192, 203, 0.2)'),
+                (generation_data.sampler_cfg.medium_attention_entropy_threshold, 'rgba(0, 255, 255, 0.2)'),
+                (generation_data.sampler_cfg.high_attention_entropy_threshold, 'rgba(255, 255, 0, 0.2)'),
             ], 'attention'
         ),
         (
             'attention_varentropy',
             'y',
             [
-                (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
-                (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
-                (sampler_config.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
+                (generation_data.sampler_cfg.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
+                (generation_data.sampler_cfg.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
+                (generation_data.sampler_cfg.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
             ],
             'attention',
         ),
@@ -307,9 +307,9 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
         #     'attention_varentropy',
         #     'z',
         #     [
-        #         (sampler_config.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
-        #         (sampler_config.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
-        #         (sampler_config.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
+        #         (generation_data.sampler_cfg.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
+        #         (generation_data.sampler_cfg.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
+        #         (generation_data.sampler_cfg.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
         #     ],
         #     'attention',
         # )

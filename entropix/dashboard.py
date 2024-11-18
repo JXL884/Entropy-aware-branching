@@ -7,7 +7,7 @@ from pathlib import Path
 import dash
 from dash import html, dcc, callback, Input, Output, State
 import dash_bootstrap_components as dbc
-from entropix.model import Generation
+from entropix.model import GenerationData
 from entropix.config import SamplerConfig, SamplerState
 
 # Import your existing plot functions
@@ -232,7 +232,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     # filename = filename or default_file
     # assert filename is not None
 
-    generation_data = Generation.load(filename)
+    generation_data = GenerationData.load(filename)
     print("loaded generation data")
     os.remove(filename)  # cleanup
 
@@ -240,7 +240,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
 
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
     sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
-    entropy_fig = plot_entropy(generation_data, sampler_config)
+    entropy_fig = plot_entropy(generation_data)
 
     # Create visibility array based on controls
     visibility = []

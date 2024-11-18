@@ -61,11 +61,12 @@ class Model(NamedTuple):
     tokenizer: Tokenizer
 
 @dataclass
-class Generation:
+class GenerationData:
     prompt: str
     response: str
     tokens: list[str]
     metrics: list[TokenMetrics]
+    sampler_cfg: SamplerConfig
     sampler_states: list[SamplerState]
 
     def to_dict(self):
@@ -74,6 +75,7 @@ class Generation:
             "response": self.response,
             "tokens": self.tokens,
             "metrics": [asdict(m) for m in self.metrics],
+            "sampler_cfg": asdict(self.sampler_cfg),
             "sampler_states": [s.name for s in self.sampler_states],
         }
 
@@ -83,6 +85,7 @@ class Generation:
         with open(fp, 'rb') as f:
             data = json.load(f)
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
+        data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
         data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)
 
@@ -263,7 +266,7 @@ def generate(
     max_tokens: int | None = None,
     print_stream: bool = False,
     metrics: bool = True,
-) -> Generation:
+) -> GenerationData:
     """
     Generate text from a prompt using the transformer model.
 
@@ -323,11 +326,12 @@ def generate(
             response += token_text
         if print_stream: print()
 
-        return Generation(
+        return GenerationData(
             prompt=prompt,
             response=response,
             tokens=gen_tokens_text,
             metrics=gen_metrics,
+            sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
         )
 
@@ -337,7 +341,7 @@ def stream(
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     metrics: bool = True,
-) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[Generation]], None, None]:
+) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Stream generated text from a prompt using the transformer model.
 
@@ -402,11 +406,12 @@ def stream(
 
             yield token_text, token_metrics, sampler_state, None
 
-        gen = Generation(
+        gen = GenerationData(
             prompt=prompt,
             response=response,
             tokens=gen_tokens_text,
             metrics=gen_metrics,
+            sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
         )
         yield "", token_metrics, sampler_state, gen
