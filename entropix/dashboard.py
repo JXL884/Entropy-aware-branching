@@ -216,8 +216,8 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     assert filename is not None
 
     generation_data = Generation.load(filename)
+    print("loaded generation data")
     if filename != default_file: os.remove(filename)
-    print(generation_data)
     sampler_config = SamplerConfig()  # TODO: load sampler in gen data
 
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
