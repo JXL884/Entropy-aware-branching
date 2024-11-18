@@ -1,3 +1,5 @@
+import os
+import base64
 import json
 from dataclasses import dataclass
 import tyro
@@ -197,17 +199,29 @@ def toggle_collapse(n_clicks, is_open):
     [Input("max-tokens-slider", "value"),
      Input("show-labels-toggle", "value"),
      Input("logits-controls", "value"),
-     Input("attention-controls", "value")],
-    State("upload-data", "filename"),
+     Input("attention-controls", "value"),
+     Input("upload-data", "contents")],
 )
-def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filename):
-    if filename is None and default_file is None:
+def update_plots(max_tokens, show_labels, logits_controls, attn_controls, contents):
+    if contents is None and default_file is None:
         return dash.no_update, dash.no_update, "No file selected"
+    elif contents is not None:
+        filename = os.path.join(os.getcwd(), "tmp.json")
+        with open(filename, "w") as f:
+            # decode and write (contents is the uploaded file as a binary string)
+            # decode and write (contents is the uploaded file as a binary string) 
+            content_type, content_string = contents.split(',')
+            decoded = base64.b64decode(content_string)
+            f.write(decoded.decode('utf-8'))
 
+            
     filename = filename or default_file
+    print(filename)
     assert filename is not None
 
     generation_data = Generation.load(filename)
+    if filename != default_file: os.remove(filename)
+    print(generation_data)
     sampler_config = SamplerConfig()  # Use default config or load from data if available
 
     # Generate plots using your existing functions
@@ -240,7 +254,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filena
             entropy_fig.data[i].visible = vis  # type: ignore
 
     # Format tokens with inline CSS styles
-    tokens_html = []
+    tokens_html = list(generation_data.prompt)
     for token, state in zip(generation_data.tokens, generation_data.sampler_states):
         color = {
             SamplerState.FLOWING: '#87CEEB',  # lightblue
@@ -250,7 +264,7 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, filena
             SamplerState.ADAPTIVE: '#800080'  # purple
         }[state]
 
-        tokens_html.append(html.Span(token + ' ', style={'color': color}))
+        tokens_html.append(html.Span(token + ' ', style={'color': color}))  # type: ignore
 
     return sampler_fig, entropy_fig, html.Div(
         tokens_html,
