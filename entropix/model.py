@@ -75,7 +75,7 @@ class GenerationData:
             "prompt": self.prompt,
             "response": self.response,
             "tokens": self.tokens,
-            "messages": [asdict(m) for m in self.messages],
+            "messages": [m.model_dump() for m in self.messages],
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_cfg": asdict(self.sampler_cfg),
             "sampler_states": [s.name for s in self.sampler_states],
