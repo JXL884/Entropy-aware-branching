@@ -69,7 +69,7 @@ app.layout = html.Div(
                         dbc.Col(
                             [
                                 html.Div(
-                                    "Click and drag the x-axis labels to scroll the plot.Click the legend to show/hide entropy and varentropy traces.",
+                                    "Click and drag the x-axis labels to scroll the plot. Click the legend to show/hide entropy and varentropy traces.",
                                     style={'fontStyle': 'italic', 'color': '#f00', 'marginBottom': '10px', 'textAlign': 'center'}
                                 )
                             ]
@@ -215,16 +215,8 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     else:
         return dash.no_update, dash.no_update, "No file selected", None
 
-    #     return dash.no_update, dash.no_update, "No file selected"
-    # elif contents is not None:
-    #     filename = os.path.join(os.getcwd(), "tmp.json")
-    #     with open(filename, "w") as f:
-    #         content_type, content_string = contents.split(',') # noqa: F841
-    #         decoded = base64.b64decode(content_string)
-    #         f.write(decoded.decode('utf-8'))
-
     filename = os.path.join(os.getcwd(), "tmp.json")
-    content_type, content_string = file_data.split(',')
+    content_type, content_string = file_data.split(',') # noqa: F841
     decoded = base64.b64decode(content_string)
     with open(filename, 'w') as f:
         f.write(decoded.decode('utf-8'))
@@ -235,8 +227,6 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     generation_data = GenerationData.load(filename)
     print("loaded generation data")
     os.remove(filename)  # cleanup
-
-    sampler_config = SamplerConfig()  # TODO: load sampler in gen data
 
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
     sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
