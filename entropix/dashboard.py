@@ -208,28 +208,21 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
     elif contents is not None:
         filename = os.path.join(os.getcwd(), "tmp.json")
         with open(filename, "w") as f:
-            # decode and write (contents is the uploaded file as a binary string)
-            # decode and write (contents is the uploaded file as a binary string) 
-            content_type, content_string = contents.split(',')
+            content_type, content_string = contents.split(',') # noqa: F841
             decoded = base64.b64decode(content_string)
             f.write(decoded.decode('utf-8'))
 
-            
     filename = filename or default_file
-    print(filename)
     assert filename is not None
 
     generation_data = Generation.load(filename)
     if filename != default_file: os.remove(filename)
     print(generation_data)
-    sampler_config = SamplerConfig()  # Use default config or load from data if available
+    sampler_config = SamplerConfig()  # TODO: load sampler in gen data
 
-    # Generate plots using your existing functions
     max_tokens = float('inf') if max_tokens == 300 else max_tokens
     sampler_fig = plot_sampler(generation_data, max_tokens=max_tokens, show_labels=bool(show_labels))  # type: ignore
-    # entropy_fig = plot_entropy(generation_data, sampler_config, out=None)
-
-    entropy_fig = plot_entropy(generation_data, sampler_config, out=None)
+    entropy_fig = plot_entropy(generation_data, sampler_config)
 
     # Create visibility array based on controls
     visibility = []
@@ -283,11 +276,11 @@ def update_plots(max_tokens, show_labels, logits_controls, attn_controls, conten
 class DashboardConfig:
     file: str | None = None
     port: int = 8050
-    host: str = '0.0.0.0'
+    host: str = '127.0.0.1'
     debug: bool = True
 
 def main(cfg: DashboardConfig = tyro.cli(DashboardConfig)):
-    global default_file  # Add at top of file: default_file = None
+    global default_file
     default_file = cfg.file
     app.run_server(debug=cfg.debug, host=cfg.host, port=cfg.port)
 

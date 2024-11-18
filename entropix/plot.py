@@ -119,7 +119,7 @@ def plot_sampler(generation_data: Generation, out: str | None = None, max_tokens
 
     return fig
 
-def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out: str | None):
+def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out: str | None = None):
     tokens = generation_data.tokens
 
     # Extract data
