@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Generator, Literal, NamedTuple, Optional, Tuple
+from typing import Any, Generator, Literal, NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -90,6 +90,14 @@ class GenerationData:
     def load(cls, fp: str):
         with open(fp, 'rb') as f:
             data = json.load(f)
+        data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
+        data["messages"] = [Message(**m) for m in data["messages"]]
+        data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
+        data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
+        return cls(**data)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]):
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
         data["messages"] = [Message(**m) for m in data["messages"]]
         data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])

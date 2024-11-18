@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 from typing import Sized
 import plotly.graph_objects as go
 import numpy as np
@@ -101,6 +102,9 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
 
     # Ensure all arrays have the same length
     safe_length = min(len(entropies), len(varentropies), len(attn_entropies), len(attn_varentropies), len(tokens))
+    if safe_length == 0: 
+        logging.error("entropix.plot.plot3d: ERROR: missing metrics data")
+        return
     entropies = entropies[:safe_length]
     varentropies = varentropies[:safe_length]
     attn_entropies = attn_entropies[:safe_length]
