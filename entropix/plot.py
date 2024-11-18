@@ -17,17 +17,8 @@ def plot_sampler(generation_data: Generation, out: str | None):
     varentropies = np.array([token_metrics.logits_varentropy for token_metrics in generation_data.metrics])
     sampler_states = generation_data.sampler_states
 
-    # Define colors for sampler states
-    colors = {
-        SamplerState.FLOWING: 'lightblue',
-        SamplerState.TREADING: 'lightgreen',
-        SamplerState.EXPLORING: 'orange',
-        SamplerState.RESAMPLING: 'pink',
-        SamplerState.ADAPTIVE: 'purple',
-    }
-
     # Create unified hover text
-    hover_template = ("Step: %{x}<br>" + "Value: %{y}<br>" + "Token: %{customdata[0]}<br>" + "State: %{customdata[1]}")
+    # hover_template = ("Step: %{x}<br>" + "Value: %{y}<br>" + "Token: %{customdata[0]}<br>" + "State: %{customdata[1]}")
 
     # Add entropy trace
     fig.add_trace(
@@ -37,8 +28,8 @@ def plot_sampler(generation_data: Generation, out: str | None):
             name='Entropy',
             line=dict(color='blue'),
             yaxis='y1',
-            customdata=list(zip(tokens if tokens else [''] * len(entropies), [state.value for state in sampler_states])),
-            hovertemplate=hover_template
+            # customdata=list(zip(tokens if tokens else [''] * len(entropies), [state.value for state in sampler_states])),
+            # hovertemplate=hover_template
         )
     )
 
@@ -50,15 +41,18 @@ def plot_sampler(generation_data: Generation, out: str | None):
             name='Varentropy',
             line=dict(color='red'),
             yaxis='y1',
-            customdata=list(zip(tokens if tokens else [''] * len(varentropies), [state.value for state in sampler_states])),
-            hovertemplate=hover_template
+            # customdata=list(zip(tokens if tokens else [''] * len(varentropies), [state.value for state in sampler_states])),
+            # hovertemplate=hover_template
         )
     )
 
-    # Create state indicators
+    # Define colors for sampler states
+    colors = {
+        SamplerState.FLOWING: 'lightblue', SamplerState.TREADING: 'lightgreen', SamplerState.EXPLORING: 'orange', SamplerState.RESAMPLING: 'pink',
+        SamplerState.ADAPTIVE: 'purple'
+    }
     state_colors = [colors[state] for state in sampler_states]
     state_names = [state.value for state in sampler_states]
-
     # Add state indicators
     fig.add_trace(
         go.Scatter(
@@ -71,12 +65,12 @@ def plot_sampler(generation_data: Generation, out: str | None):
                 symbol='square',
             ),
             customdata=list(zip(tokens if tokens else [''] * len(sampler_states), state_names)),
-            hovertemplate=hover_template,
+            # hovertemplate=hover_template,
+            hovertemplate='%{customdata[1]}<extra></extra>',  # Modified this line
             yaxis='y2',
             showlegend=False,
         )
     )
-
     # Add state legend
     for state, color in colors.items():
         fig.add_trace(
@@ -96,13 +90,23 @@ def plot_sampler(generation_data: Generation, out: str | None):
 
     # Update layout
     fig.update_layout(
-        title='Entropy, Varentropy and Sampler States over Generation Steps',
-        xaxis=dict(title='Generation Step', showticklabels=True, tickmode='linear', dtick=5),
-        yaxis=dict(title='Value', domain=[0.25, 0.95]),
+        # title='Entropy, Varentropy and Sampler States over Generation Steps',
+        # xaxis=dict(title='Generation Step', showticklabels=True, tickmode='linear', dtick=5),
+        xaxis=dict(
+            title='Token',
+            showticklabels=True,
+            tickmode='array',
+            ticktext=tokens,
+            tickvals=list(range(len(tokens))),
+            tickangle=45,  # Angle the text to prevent overlap
+            range=[0, min(len(tokens), 150)]  # Add this line to limit initial x-axis range
+        ),
+        yaxis=dict(title='Value', domain=[0.4, 0.95]),
         yaxis2=dict(domain=[0.1, 0.2], showticklabels=False, range=[-0.5, 0.5]),
         height=750,
         showlegend=True,
-        legend=dict(yanchor="bottom", y=1.02, xanchor="right", x=1, orientation="h")
+        legend=dict(yanchor="bottom", y=1.02, xanchor="right", x=1, orientation="h"),
+        hovermode='x',
     )
 
     # Add tokens
@@ -122,32 +126,33 @@ def plot_sampler(generation_data: Generation, out: str | None):
         formatted_text += token_text
         line_length += len(token) + 1  # +1 for the space
 
-    # Add the text
-    fig.add_annotation(
-        text=formatted_text,
-        xref="paper",
-        yref="paper",
-        x=0,
-        y=0.07,
-        showarrow=False,
-        font=dict(size=20),
-        align="left",
-        xanchor="left",
-        yanchor="top",
-        xshift=5,
-        yshift=0,
-        bordercolor="gray",
-        borderwidth=0,
-    )
+    # # Add the text
+    # fig.add_annotation(
+    #     text=formatted_text,
+    #     xref="paper",
+    #     yref="paper",
+    #     x=0,
+    #     y=0.07,
+    #     showarrow=False,
+    #     font=dict(size=20),
+    #     align="left",
+    #     xanchor="left",
+    #     yanchor="top",
+    #     xshift=5,
+    #     yshift=0,
+    #     bordercolor="gray",
+    #     borderwidth=0,
+    # )
 
-    num_lines = formatted_text.count('<br>') + 1
-    bottom_margin = max(30, num_lines * 15)
+    # num_lines = formatted_text.count('<br>') + 1
+    # bottom_margin = max(30, num_lines * 15)
 
-    fig.update_layout(margin=dict(b=bottom_margin), yaxis=dict(domain=[0.25, 0.95]), yaxis2=dict(domain=[0.1, 0.2]))
+    # fig.update_layout(margin=dict(b=bottom_margin), yaxis=dict(domain=[0.25, 0.95]), yaxis2=dict(domain=[0.1, 0.2]))
 
     if not out:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = f"sampler_metrics_{timestamp}.html"
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # out = f"sampler_metrics_{timestamp}.html"
+        return fig
     elif not out.endswith(".html"):
         out += ".html"
     fig.write_html(out, include_plotlyjs=True, full_html=True)
@@ -487,8 +492,9 @@ def plot_entropy(generation_data: Generation, sampler_config: SamplerConfig, out
     )
 
     if not out:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = f"entropy_plot_{timestamp}.html"
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # out = f"entropy_plot_{timestamp}.html"
+        return fig
     elif not out.endswith(".html"):
         out += ".html"
     fig.write_html(out, include_plotlyjs=True, full_html=True)
