@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import uvicorn
+import tyro
 import os
 import time
 import json
@@ -154,8 +156,9 @@ def generate_response(messages: list[Message], model: Model, sampler_cfg: Sample
     # NOTE: only one choice
     choices = [{"index": 0, "message": {"role": "assistant", "content": gen.response}, "finish_reason": "stop"}]
     if save_path:
-        with open(f"{save_path}/{created_at}.json", "w") as f:
-            json.dump(gen.to_dict(), f)
+        # with open(f"{save_path}/{created_at}.json", "w") as f:
+        #     json.dump(gen.to_dict(), f)
+        gen.save(f"{save_path}/{created_at}.json")
         logging.info(f"Saved response to {save_path}/{created_at}.json")
     return JSONResponse(
         content=dict(
@@ -196,8 +199,9 @@ def stream_response(messages: list[Message], model: Model, sampler_cfg: SamplerC
 
 
     if save_path and gen is not None:
-        with open(f"{save_path}/{created_at}.json", "w") as f:
-            json.dump(gen.to_dict(), f)
+        # with open(f"{save_path}/{created_at}.json", "w") as f:
+        #     json.dump(gen.to_dict(), f)
+        gen.save(f"{save_path}/{created_at}.json")
         logging.info(f"Saved streaming response to {save_path}/{created_at}.json")
 
 @app.post("/v1/chat/completions")
@@ -210,10 +214,18 @@ async def openai_chat_completions(request: ChatRequest, model_manager: ModelMana
     else:
         return generate_response(request.messages, model, sampler_cfg, save_path, request.max_completion_tokens)
 
-if __name__ == "__main__":
-    import uvicorn
-    import tyro
 
+def main(server_args: ServerArgs = tyro.cli(ServerArgs)):
+    uvicorn.run(
+        app,
+        host=server_args.host,
+        port=server_args.port,
+        log_level=server_args.log_level,
+        timeout_keep_alive=5,
+        loop="uvloop",
+    )
+
+if __name__ == "__main__":
     server_args = tyro.cli(ServerArgs)
     uvicorn.run(
         "server:app",

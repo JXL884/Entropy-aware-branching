@@ -75,6 +75,7 @@ class GenerationData:
             "prompt": self.prompt,
             "response": self.response,
             "tokens": self.tokens,
+            "messages": [asdict(m) for m in self.messages],
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_cfg": asdict(self.sampler_cfg),
             "sampler_states": [s.name for s in self.sampler_states],
@@ -82,14 +83,16 @@ class GenerationData:
 
     def save(self, fp: str):
         with open(fp, "w") as f:
-            f.write(json.dumps(self.to_dict()))
+            s = json.dumps(self.to_dict())
+            print(s)
+            f.write(s)
 
     @classmethod
     def load(cls, fp: str):
-        # load a json file dumped with to_dict
         with open(fp, 'rb') as f:
             data = json.load(f)
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
+        data["messages"] = [Message(**m) for m in data["messages"]]
         data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
         data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)

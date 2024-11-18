@@ -23,6 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
+entropix-server = "entropix.server:main"
 entropix-dashboard = "entropix.dashboard:main"
 
 [tool.setuptools.packages.find]
