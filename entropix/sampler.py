@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple
 
-from entropix.stats import calculate_metrics
+from entropix.stats import TokenMetrics, calculate_metrics
 from entropix.config import SamplerState, SamplerConfig
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -12,7 +12,8 @@ def multinomial_sample_one(probs_sort: torch.Tensor, generator: torch.Generator 
     q = torch.rand(probs_sort.shape, generator=generator, device=probs_sort.device)
     return torch.argmax(probs_sort / q, dim=-1, keepdim=True).to(torch.int32)
 
-def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, min_p: float, generator: torch.Generator | None = None) -> torch.Tensor:
+def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: float, min_p: float, generator: torch.Generator | None = None) -> torch.Tensor:
+    """Temperature -> min_p -> top_k -> top_p"""
     bsz = logits.shape[0]
     logit = logits[:, -1]
     probs = F.softmax(logit / temperature, dim=-1)
@@ -37,6 +38,55 @@ def _sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, 
     # Convert next_token to int64 before using it in gather
     next_token_g = torch.gather(probs_idx, -1, next_token.reshape(bsz, 1).to(torch.int64))
     return next_token_g.to(torch.int32)
+
+def temperature_sample(logits: torch.Tensor, temperature: float, generator: torch.Generator | None = None) -> torch.Tensor:
+    scaled_logits = logits / temperature
+    probs = F.softmax(scaled_logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1, generator=generator).to(torch.int32)
+
+def top_p_sample(logits: torch.Tensor, top_p: float, generator: torch.Generator | None = None) -> torch.Tensor:
+    probs = F.softmax(logits, dim=-1)
+    sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+    # Create a mask for probs that exceed the cumulative threshold
+    sorted_indices_to_remove = cumulative_probs > top_p
+    # Shift the indices to keep also the first token above the threshold
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+    # Scatter sorted tensors to original indexing
+    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+    probs = probs.masked_fill(indices_to_remove, 0.0)
+    probs = probs / probs.sum(dim=-1, keepdim=True)
+    return torch.multinomial(probs, num_samples=1, generator=generator).to(torch.int32)
+
+def top_k_sample(logits: torch.Tensor, top_k: int, generator: torch.Generator | None = None) -> torch.Tensor:
+    top_k = min(top_k, logits.size(-1))  # Safety check
+    # Remove all tokens with a probability less than the last token of the top-k
+    indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+    logits[indices_to_remove] = float('-inf')
+    probs = F.softmax(logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1, generator=generator).to(torch.int32)
+
+def min_p_sample(logits: torch.Tensor, min_p: float, generator: torch.Generator | None = None) -> torch.Tensor:
+    probs = F.softmax(logits, dim=-1)
+
+    max_prob = torch.max(probs, dim=-1, keepdim=True).values  # noqa: PD011
+    min_threshold = max_prob * min_p
+    mask = probs < min_threshold
+
+    # Set probabilities below the threshold to 0
+    filtered_probs = probs.masked_fill(mask, 0.0)
+    # Renormalize the remaining probabilities
+    filtered_probs = filtered_probs / filtered_probs.sum(dim=-1, keepdim=True)
+
+    return torch.multinomial(filtered_probs, num_samples=1, generator=generator).to(torch.int32)
+
+def quadratic_sample(logits: torch.Tensor, factor: float, generator: torch.Generator | None = None) -> torch.Tensor:
+    probs = F.softmax(logits, dim=-1)
+    transformed_probs = probs ** (1 + factor)
+    transformed_probs = transformed_probs / transformed_probs.sum(dim=-1, keepdim=True)
+    return torch.multinomial(transformed_probs, num_samples=1, generator=generator).to(torch.int32)
+
 
 def adaptive_sample(logits: torch.Tensor, temperature: float, epsilon: float = 0.01, generator: torch.Generator | None = None) -> torch.Tensor:
     """
@@ -91,112 +141,86 @@ def adaptive_sample(logits: torch.Tensor, temperature: float, epsilon: float = 0
     return next_token_g.to(torch.int32)
 
 def sample(
-    gen_tokens: torch.Tensor,
-    logits: torch.Tensor,
-    attention_scores: torch.Tensor,
+    gen_tokens: torch.Tensor,  # tokens generated so far
+    logits: torch.Tensor,  # logits (distribution over all possible choices) of the next token
+    attention_scores: torch.Tensor,  # internal attention scores (Q⋅Kᵀ)/√d
+    metrics: TokenMetrics,
     cfg: SamplerConfig,
     clarifying_question_token: int = 2564,
-    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
+    # generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
 ) -> Tuple[torch.Tensor, SamplerState]:
-    metrics = calculate_metrics(logits, attention_scores)
-    ent, vent = metrics.logits_entropy, metrics.logits_varentropy
-    attn_ent, attn_vent = metrics.attn_entropy, metrics.attn_varentropy
+    # metrics = calculate_metrics(logits, attention_scores)
+    logit_entropy, logit_varentropy = metrics.logits_entropy, metrics.logits_varentropy
+    # NOTE: not using rn
+    attn_entropy, attn_varentropy = metrics.attn_entropy, metrics.attn_varentropy
     agreement = metrics.agreement
     interaction_strength = metrics.interaction_strength
 
-    # Low Entropy, Low Varentropy: "flowing with unspoken intent"
-    if cfg.states["flowing"] and (
-        ent < cfg.low_logits_entropy_threshold and vent < cfg.low_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent < cfg.low_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
-        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
-    ):
+    # NOTE: previously a param, now hardcoded
+    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337)
+
+    # Low Entropy, Low Varentropy
+    if logit_entropy < cfg.thresholds.entropy.low and logit_varentropy < cfg.thresholds.entropy.low:
         sampler_state = SamplerState.FLOWING
         sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
         return sampled_token, sampler_state
 
-    # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
-    elif cfg.states["treading"] and (
-        ent > cfg.high_logits_entropy_threshold and vent < cfg.low_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent < cfg.low_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
-        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
-    ):
-        sampler_state = SamplerState.TREADING
-        # Insert a clarifying question token if not already present
-        if not torch.isin(gen_tokens[:, -1], torch.tensor([clarifying_question_token], device=device, dtype=gen_tokens.dtype)).any():
-            sampled_token = torch.tensor([[clarifying_question_token]], dtype=torch.int32, device=device)
-            return sampled_token, sampler_state
-        else:
-            # If we've just asked a question, sample with slightly higher temperature
-            temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_ent
-            sampled_token = _sample(
-                logits, temperature=min(1.5, cfg.temperature * temp_adj), top_p=cfg.top_p, top_k=cfg.top_k, min_p=cfg.min_p, generator=generator
-            )
-            return sampled_token, sampler_state
+    # High Entropy, Low Varentropy TODO: inject "wait..." or something like that
+    # NOTE: should either dynamically find the token from the tokenizer here, or accept it as a param and do so in generate
 
-    # Low Entropy, High Varentropy: "exploring forks in the path"
-    elif cfg.states["exploring"] and (
-        ent < cfg.high_logits_entropy_threshold and vent > cfg.high_logits_varentropy_threshold and attn_ent < cfg.low_attention_entropy_threshold
-        and attn_vent > cfg.high_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement < cfg.low_agreement_threshold) and
-        (not cfg.states["interaction_strength"] or interaction_strength < cfg.low_interaction_strength_threshold)
-    ):
-        sampler_state = SamplerState.EXPLORING
-        temp_adj = cfg.low_entropy_interaction_strength_offset + cfg.low_entropy_interaction_strength_coefficient * interaction_strength
-        top_k_adj = max(5, int(cfg.top_k * (1 + 0.5 * (1 - agreement))))
-        sampled_token = _sample(
-            logits, temperature=min(1.5, cfg.temperature * temp_adj), top_p=cfg.top_p, top_k=top_k_adj, min_p=cfg.min_p, generator=generator
-        )
-        return sampled_token, sampler_state
+    # elif logit_entropy > cfg.thresholds.entropy.high and logit_varentropy < cfg.thresholds.varentropy.low:
+    #     sampler_state = SamplerState.TREADING
+    #     # TODO: change how we insert thinking tokens
+    #     # Insert a clarifying question token if not already present
+    #     if not torch.isin(gen_tokens[:, -1], torch.tensor([clarifying_question_token], device=device, dtype=gen_tokens.dtype)).any():
+    #         sampled_token = torch.tensor([[clarifying_question_token]], dtype=torch.int32, device=device)
+    #         return sampled_token, sampler_state
+    #     else:
+    #         # TODO: need a better way to check for this?
+    #         pass
+    #         # If we've just asked a question, sample with slightly higher temperature
+    #         # temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_entropy
+    #         sampled_token = _sample(
+    #             # WARNING: hardcoded temporarily
+    #             logits,
+    #             temperature=min(1.5, cfg.temperature * 1.5),
+    #             top_p=cfg.top_p,
+    #             top_k=cfg.top_k,
+    #             min_p=cfg.min_p,
+    #             generator=generator
+    #         )
+    #         return sampled_token, sampler_state
 
-    # High Entropy, High Varentropy: "resampling in the mist"
-    elif cfg.states["resampling"] and (
-        ent > cfg.medium_logits_entropy_threshold and vent > cfg.high_logits_varentropy_threshold and attn_ent > cfg.high_attention_entropy_threshold
-        and attn_vent > cfg.high_attention_varentropy_threshold and (not cfg.states["agreement"] or agreement > cfg.high_agreement_threshold) and
-        (not cfg.states["interaction_strength"] or interaction_strength > cfg.high_interaction_strength_threshold)
-    ):
-        sampler_state = SamplerState.RESAMPLING
-        # Use high temperature and adjusted top_p based on attention metrics
-        temp_adj = cfg.high_entropy_varentropy_attention_offset + cfg.high_entropy_varentropy_attention_coefficient * attn_vent
-        top_p_adj = max(0.5, cfg.top_p - cfg.high_entropy_attention_coefficient * attn_ent)
-        sampled_token = _sample(
-            logits, temperature=max(2.0, cfg.temperature * temp_adj), top_p=top_p_adj, top_k=cfg.top_k, min_p=cfg.min_p, generator=generator
-        )
-        return sampled_token, sampler_state
 
-    # All other cases: use adaptive sampling
-    else:
+    # TODO: branching, other sampler choices
+    
+    else: # All other cases: use adaptive sampling
+        # TODO: break this out to its own function, revist how we are doing "adaptive sampling" **OR** just use a simpler sampler method
         sampler_state = SamplerState.ADAPTIVE
-        '''temperature = 0.666
-        sampled_token = adaptive_sample(
-            logits,
-            temperature=temperature,
-            epsilon=0.1,
-            generator=generator
-        )'''
-        logits_uncertainty = ent + vent
-        attn_uncertainty = attn_ent + attn_vent
+        logits_uncertainty = logit_entropy + logit_varentropy
+        attn_uncertainty = attn_entropy + attn_varentropy
 
+        # NOTE: adaptive temperature, not using config
         temperature = cfg.temperature * (
-            1 + cfg.adaptive_temperature_logits_coefficient * ent + cfg.adaptive_temperature_attention_coefficient * attn_ent -
+            1 + cfg.adaptive_temperature_logits_coefficient * logit_entropy + cfg.adaptive_temperature_attention_coefficient * attn_entropy -
             cfg.adaptive_temperature_agreement_coefficient * agreement
         )
-        top_p = torch.clamp(torch.tensor(cfg.top_p * (1 + cfg.adaptive_top_p_coefficient * attn_vent)), 0.1, 1.0)
+        top_p = torch.clamp(torch.tensor(cfg.top_p * (1 + cfg.adaptive_top_p_coefficient * attn_varentropy)), 0.1, 1.0)
         top_k = int(
             torch.clamp(
                 torch.round(
-                    torch.tensor(cfg.top_k) * (
-                        1 + cfg.adaptive_top_k_interaction_coefficient * interaction_strength -
-                        cfg.adaptive_top_k_agreement_coefficient * agreement
-                    )
+                    torch.tensor(cfg.top_k) *
+                    (1 + cfg.adaptive_top_k_interaction_coefficient * interaction_strength - cfg.adaptive_top_k_agreement_coefficient * agreement)
                 ),
                 min=1,
                 max=100
             ).item()
         )
-        min_p = torch.clamp(torch.tensor((cfg.min_p * (1 - cfg.adaptive_min_p_coefficient * vent))), 0.01, 0.5)
+        min_p = torch.clamp(torch.tensor((cfg.min_p * (1 - cfg.adaptive_min_p_coefficient * logit_varentropy))), 0.01, 0.5)
 
         samples = []
         for _ in range(cfg.n_adaptive_samples):
-            sample = _sample(logits, temperature=temperature, top_p=top_p, top_k=top_k, min_p=min_p, generator=generator)
+            sample = _sample(logits, temperature=temperature, top_p=top_p.item(), top_k=top_k, min_p=min_p.item(), generator=generator)
             samples.append(sample)
 
         def score_sample(sample):
@@ -211,12 +235,12 @@ def sample(
             log_prob = torch.sum(log_probs * one_hot, dim=-1)
 
             confidence_score = (
-                (1 - ent / cfg.high_logits_entropy_threshold) * cfg.adaptive_score_logits_entropy_coefficient +
-                (1 - attn_ent / cfg.high_attention_entropy_threshold) * cfg.adaptive_score_attention_entropy_coefficient +
-                (1 - vent / cfg.high_logits_varentropy_threshold) * cfg.adaptive_score_logits_varentropy_coefficient +
-                (1 - attn_vent / cfg.high_attention_varentropy_threshold) * cfg.adaptive_score_attention_varentropy_coefficient +
-                (agreement / cfg.high_agreement_threshold) * cfg.adaptive_score_agreement_coefficient +
-                (interaction_strength / cfg.high_interaction_strength_threshold) * cfg.adaptive_score_interaction_strength_coefficient
+                (1 - logit_entropy / cfg.thresholds.entropy.high) * cfg.adaptive_score_logits_entropy_coefficient +
+                (1 - attn_entropy / cfg.thresholds.attn_entropy.high) * cfg.adaptive_score_attention_entropy_coefficient +
+                (1 - logit_varentropy / cfg.thresholds.varentropy.high) * cfg.adaptive_score_logits_varentropy_coefficient +
+                (1 - attn_varentropy / cfg.thresholds.attn_varentropy.high) * cfg.adaptive_score_attention_varentropy_coefficient +
+                (agreement / cfg.thresholds.agreement.high) * cfg.adaptive_score_agreement_coefficient +
+                (interaction_strength / cfg.thresholds.interaction_strength.high) * cfg.adaptive_score_interaction_strength_coefficient
             )
             return log_prob + confidence_score
 

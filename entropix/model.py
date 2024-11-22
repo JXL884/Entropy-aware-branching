@@ -275,12 +275,11 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
     return mask
 
 def generate(
-    messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
+    messages: list[Message] | list[dict[str, str]] | str,  # type: ignore (allow definition to be overriden after type conversion)
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     print_stream: bool = False,
-    metrics: bool = True,
     apply_chat_template: bool = True,
 ) -> GenerationData:
     """
@@ -292,7 +291,6 @@ def generate(
         sampler_cfg: Sampler configuration
         max_tokens: Maximum number of tokens to generate
         print_stream: Optional, default False. Flag to print the generated tokens to the console
-        metrics: Optional, default True. Flag to calculate and return entropy metrics
         apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
 
     Returns:
@@ -337,11 +335,11 @@ def generate(
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
-            next_token, sampler_state = sample(gen_tokens, logits, scores, sampler_cfg)
+            metrics = calculate_metrics(logits, scores)
+            next_token, sampler_state = sample(gen_tokens, logits, scores, metrics, sampler_cfg)
 
-            if metrics:
-                gen_metrics.append(calculate_metrics(logits, scores))
-                sampler_states.append(sampler_state)
+            gen_metrics.append(metrics)
+            sampler_states.append(sampler_state)
 
             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
             freqs_end = cur_pos + 1
