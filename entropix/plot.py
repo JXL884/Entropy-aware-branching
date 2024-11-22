@@ -19,13 +19,13 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
 
     thresholds = [
         # Entropy thresholds (blue)
-        (generation_data.sampler_cfg.low_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'Low Entropy'),
-        (generation_data.sampler_cfg.medium_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
-        (generation_data.sampler_cfg.high_logits_entropy_threshold, 'rgba(0,0,255,0.7)', 'High Entropy'),
+        (generation_data.sampler_cfg.thresholds.entropy.low, 'rgba(0,0,255,0.7)', 'Low Entropy'),
+        (generation_data.sampler_cfg.thresholds.entropy.medium, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
+        (generation_data.sampler_cfg.thresholds.entropy.high, 'rgba(0,0,255,0.7)', 'High Entropy'),
         # Varentropy thresholds (red)
-        (generation_data.sampler_cfg.low_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
-        (generation_data.sampler_cfg.medium_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
-        (generation_data.sampler_cfg.high_logits_varentropy_threshold, 'rgba(255,0,0,0.7)', 'High Varentropy'),
+        (generation_data.sampler_cfg.thresholds.varentropy.low, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
+        (generation_data.sampler_cfg.thresholds.varentropy.medium, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
+        (generation_data.sampler_cfg.thresholds.varentropy.high, 'rgba(255,0,0,0.7)', 'High Varentropy'),
     ]
     for threshold, color, name in thresholds:
         fig.add_trace(
@@ -241,32 +241,32 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
     thresholds = [
         (
             'logits_entropy', 'z', [
-                (generation_data.sampler_cfg.low_logits_entropy_threshold, 'rgba(255, 0, 0, 0.2)'),
-                (generation_data.sampler_cfg.medium_logits_entropy_threshold, 'rgba(0, 255, 0, 0.2)'),
-                (generation_data.sampler_cfg.high_logits_entropy_threshold, 'rgba(0, 0, 255, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.entropy.low, 'rgba(255, 0, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.entropy.medium, 'rgba(0, 255, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.entropy.high, 'rgba(0, 0, 255, 0.2)'),
             ], 'logits'
         ),
         (
             'logits_varentropy', 'y', [
-                (generation_data.sampler_cfg.low_logits_varentropy_threshold, 'rgba(255, 165, 0, 0.2)'),
-                (generation_data.sampler_cfg.medium_logits_varentropy_threshold, 'rgba(165, 42, 42, 0.2)'),
-                (generation_data.sampler_cfg.high_logits_varentropy_threshold, 'rgba(128, 0, 128, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.varentropy.low, 'rgba(255, 165, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.varentropy.medium, 'rgba(165, 42, 42, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.varentropy.high, 'rgba(128, 0, 128, 0.2)'),
             ], 'logits'
         ),
         (
             'attention_entropy', 'z', [
-                (generation_data.sampler_cfg.low_attention_entropy_threshold, 'rgba(255, 192, 203, 0.2)'),
-                (generation_data.sampler_cfg.medium_attention_entropy_threshold, 'rgba(0, 255, 255, 0.2)'),
-                (generation_data.sampler_cfg.high_attention_entropy_threshold, 'rgba(255, 255, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_entropy.low, 'rgba(255, 192, 203, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_entropy.medium, 'rgba(0, 255, 255, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_entropy.high, 'rgba(255, 255, 0, 0.2)'),
             ], 'attention'
         ),
         (
             'attention_varentropy',
             'y',
             [
-                (generation_data.sampler_cfg.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
-                (generation_data.sampler_cfg.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
-                (generation_data.sampler_cfg.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_varentropy.low, 'rgba(70, 130, 180, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_varentropy.medium, 'rgba(244, 164, 96, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.attn_varentropy.high, 'rgba(50, 205, 50, 0.2)'),
             ],
             'attention',
         ),
