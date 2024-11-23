@@ -8,13 +8,7 @@ messages = [
     {"role": "system", "content": "You are a super intelligent assistant."},
     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
 ]
-sampler_cfg = SamplerConfig()  # using the default sampler thresholds, can specify inline to change
-# e.g. to use all defaults except logit entropy thresholds
-# sampler_cfg = SamplerConfig(
-#     low_logits_entropy_threshold=0.3,
-#     medium_logits_entropy_threshold=1.0,
-#     high_logits_entropy_threshold=2.0,
-# )
+sampler_cfg = SamplerConfig() # using default config
 
 for model_params in (LLAMA_1B, SMOLLM_360M):
     print()
@@ -35,8 +29,8 @@ for model_params in (LLAMA_1B, SMOLLM_360M):
 
     gen_data = generate(messages, model, sampler_cfg, print_stream=True)
 
-    gen_data.save(f"{model_params.name}_gen_data.json")
+    gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
 
     print()
-    plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
-    plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")
+    # plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
+    # plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")
