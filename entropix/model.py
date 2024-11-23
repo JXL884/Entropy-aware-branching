@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Generator, Literal, NamedTuple, Optional, Tuple
+from typing import Any, Generator, NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState
 from entropix.kvcache import KVCache
 from entropix.sampler import sample
-from entropix.stats import AttnStats, TokenMetrics, calculate_metrics
+from entropix.metrics import AttnMetrics, TokenMetrics, calculate_metrics
 from entropix.tokenizer import Tokenizer, Message
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -207,9 +207,9 @@ def xfmr(
     freqs_cis: torch.Tensor,
     kvcache: KVCache,
     attn_mask: Optional[torch.Tensor] = None
-) -> Tuple[torch.Tensor, KVCache, torch.Tensor, AttnStats]:
+) -> Tuple[torch.Tensor, KVCache, torch.Tensor, AttnMetrics]:
     h = xfmr_weights.tok_embeddings[tokens]
-    attn_stats = AttnStats.new(bsz=tokens.shape[0], n_layers=model_params.n_layers, n_heads=model_params.n_local_heads, device=device)
+    attn_stats = AttnMetrics.new(bsz=tokens.shape[0], n_layers=model_params.n_layers, n_heads=model_params.n_local_heads, device=device)
     for i in range(model_params.n_layers):
         norm_x = rms_norm(h, xfmr_weights.layer_weights[i].attention_norm)
         h_attn, kvcache, scores = attention(norm_x, xfmr_weights.layer_weights[i], model_params, cur_pos, i, freqs_cis, kvcache, attn_mask=attn_mask)

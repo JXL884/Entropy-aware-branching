@@ -1,31 +1,36 @@
-from pathlib import Path
 import logging
 from typing import Sized
 import plotly.graph_objects as go
 import numpy as np
-import json
-from datetime import datetime
 
-from entropix.config import SamplerConfig, SamplerState
+from entropix.config import SamplerState
 from entropix.model import GenerationData
+
+STATE_COLOR_MAP = {
+    SamplerState.ARGMAX: '#FF8C9F',  # pink
+    SamplerState.TEMPERATURE: '#FFA500',  # orange
+    SamplerState.ADAPTIVE: '#800080',  # purple
+    SamplerState.PAUSE: '#90EE90',  # lightgreen
+    SamplerState.BRANCHING: '#ADD8E6',  # lightblue
+}
 
 def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
     fig = go.Figure()
 
     tokens = generation_data.tokens
-    entropies = np.array([token_metrics.logits_entropy for token_metrics in generation_data.metrics])
-    varentropies = np.array([token_metrics.logits_varentropy for token_metrics in generation_data.metrics])
+    entropies = np.array([token_metrics.logit_entropy for token_metrics in generation_data.metrics])
+    varentropies = np.array([token_metrics.logit_varentropy for token_metrics in generation_data.metrics])
     sampler_states = generation_data.sampler_states
 
     thresholds = [
         # Entropy thresholds (blue)
-        (generation_data.sampler_cfg.thresholds.entropy.low, 'rgba(0,0,255,0.7)', 'Low Entropy'),
-        (generation_data.sampler_cfg.thresholds.entropy.medium, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
-        (generation_data.sampler_cfg.thresholds.entropy.high, 'rgba(0,0,255,0.7)', 'High Entropy'),
+        (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(0,0,255,0.7)', 'Low Entropy'),
+        (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
+        (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0,0,255,0.7)', 'High Entropy'),
         # Varentropy thresholds (red)
-        (generation_data.sampler_cfg.thresholds.varentropy.low, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
-        (generation_data.sampler_cfg.thresholds.varentropy.medium, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
-        (generation_data.sampler_cfg.thresholds.varentropy.high, 'rgba(255,0,0,0.7)', 'High Varentropy'),
+        (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
+        (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
+        (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(255,0,0,0.7)', 'High Varentropy'),
     ]
     for threshold, color, name in thresholds:
         fig.add_trace(
@@ -35,7 +40,7 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
                 mode='lines',
                 line=dict(color=color, dash='dash', width=1),
                 name=name,
-                visible='legendonly'  # Hidden by default
+                # visible='legendonly'  # Hidden by default
             )
         )
 
@@ -44,11 +49,7 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
     fig.add_trace(go.Scatter(name='Varentropy', line=dict(color='red'), x=list(range(len(varentropies))), y=varentropies, yaxis='y1'))
 
     # Sampler states
-    colors = {
-        SamplerState.FLOWING: 'lightblue', SamplerState.TREADING: 'lightgreen', SamplerState.EXPLORING: 'orange', SamplerState.RESAMPLING: 'pink',
-        SamplerState.ADAPTIVE: 'purple'
-    }
-    state_colors = [colors[state] for state in sampler_states]
+    state_colors = [STATE_COLOR_MAP[state] for state in sampler_states]
     state_names = [state.value for state in sampler_states]
     fig.add_trace(
         go.Scatter(
@@ -63,7 +64,7 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
         )
     )
     # Custom legend
-    for state, color in colors.items():
+    for state, color in STATE_COLOR_MAP.items():
         fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color=color, size=10, symbol='square'), name=state.value, showlegend=True))
 
     # Update layout
@@ -95,14 +96,14 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
     tokens = generation_data.tokens
 
     # Extract data
-    entropies = np.array([token_metrics.logits_entropy for token_metrics in generation_data.metrics])
-    varentropies = np.array([token_metrics.logits_varentropy for token_metrics in generation_data.metrics])
+    entropies = np.array([token_metrics.logit_entropy for token_metrics in generation_data.metrics])
+    varentropies = np.array([token_metrics.logit_varentropy for token_metrics in generation_data.metrics])
     attn_entropies = np.array([token_metrics.attn_entropy for token_metrics in generation_data.metrics])
     attn_varentropies = np.array([token_metrics.attn_varentropy for token_metrics in generation_data.metrics])
 
     # Ensure all arrays have the same length
     safe_length = min(len(entropies), len(varentropies), len(attn_entropies), len(attn_varentropies), len(tokens))
-    if safe_length == 0: 
+    if safe_length == 0:
         logging.error("entropix.plot.plot3d: ERROR: missing metrics data")
         return
     entropies = entropies[:safe_length]
@@ -241,16 +242,16 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
     thresholds = [
         (
             'logits_entropy', 'z', [
-                (generation_data.sampler_cfg.thresholds.entropy.low, 'rgba(255, 0, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.entropy.medium, 'rgba(0, 255, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.entropy.high, 'rgba(0, 0, 255, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(255, 0, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0, 255, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0, 0, 255, 0.2)'),
             ], 'logits'
         ),
         (
             'logits_varentropy', 'y', [
-                (generation_data.sampler_cfg.thresholds.varentropy.low, 'rgba(255, 165, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.varentropy.medium, 'rgba(165, 42, 42, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.varentropy.high, 'rgba(128, 0, 128, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255, 165, 0, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(165, 42, 42, 0.2)'),
+                (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(128, 0, 128, 0.2)'),
             ], 'logits'
         ),
         (
