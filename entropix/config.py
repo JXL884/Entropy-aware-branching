@@ -46,6 +46,14 @@ class SamplerState(Enum):
     PAUSE = "Pausing to think"
     BRANCHING = "Branching"
 
+STATE_COLOR_MAP = {
+    SamplerState.ARGMAX: '#FF8C9F',  # pink
+    SamplerState.TEMPERATURE: '#FFA500',  # orange
+    SamplerState.ADAPTIVE: '#800080',  # purple
+    SamplerState.PAUSE: '#90EE90',  # lightgreen
+    SamplerState.BRANCHING: '#ADD8E6',  # lightblue
+}
+
 @dataclass
 class SamplerConfig:
     temperature: float = 0.666

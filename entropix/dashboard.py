@@ -18,10 +18,10 @@ from dash import (
     html,
 )
 
-from entropix.config import SamplerConfig
+from entropix.config import SamplerConfig, STATE_COLOR_MAP
 from entropix.model import GenerationData, Model, load_weights, stream
 from entropix.models.llama import LLAMA_1B
-from entropix.plot import plot2d, plot3d, STATE_COLOR_MAP
+from entropix.plot import plot2d, plot3d
 from entropix.tokenizer import Message, Tokenizer
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])

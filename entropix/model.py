@@ -10,12 +10,13 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 import torch.nn.functional as F
+from rich import print as rprint
 
-from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState
+from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState, STATE_COLOR_MAP
 from entropix.kvcache import KVCache
-from entropix.sampler import sample
 from entropix.metrics import AttnMetrics, TokenMetrics, calculate_metrics
-from entropix.tokenizer import Tokenizer, Message
+from entropix.sampler import sample
+from entropix.tokenizer import Message, Tokenizer
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -314,6 +315,13 @@ def generate(
     if apply_chat_template:
         prompt = model.tokenizer.apply_chat_template(messages)
 
+    
+    if print_stream:
+        print()
+        for state, color in STATE_COLOR_MAP.items():
+            rprint(f"[{color}]■[/] [dim]{state.value}[/]")
+        print()
+
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
         bs, seqlen = tokens.shape
@@ -352,7 +360,8 @@ def generate(
             # break after adding the stop token and its metrics to output but before adding to response text / printing
             if torch.isin(next_token, stop_tokens).any(): break
 
-            if print_stream: print(token_text, end='', flush=True)
+            if print_stream: #print(token_text, end='', flush=True)
+                rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
             response += token_text
         if print_stream: print()
 
@@ -445,8 +454,11 @@ def stream(
 
             # break after adding the stop token and its metrics to output but before adding to response text and yielding
             if torch.isin(next_token, stop_tokens).any(): break
+            if print_stream: #print(token_text, end='', flush=True)
+                rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
 
             yield token_text, metrics, sampler_state, None
+        if print_stream: print()
 
         messages.append(Message(role="assistant", content=response))
         gen = GenerationData(

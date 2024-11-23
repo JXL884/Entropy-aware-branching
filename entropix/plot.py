@@ -3,16 +3,9 @@ from typing import Sized
 import plotly.graph_objects as go
 import numpy as np
 
-from entropix.config import SamplerState
+from entropix.config import SamplerState, STATE_COLOR_MAP
 from entropix.model import GenerationData
 
-STATE_COLOR_MAP = {
-    SamplerState.ARGMAX: '#FF8C9F',  # pink
-    SamplerState.TEMPERATURE: '#FFA500',  # orange
-    SamplerState.ADAPTIVE: '#800080',  # purple
-    SamplerState.PAUSE: '#90EE90',  # lightgreen
-    SamplerState.BRANCHING: '#ADD8E6',  # lightblue
-}
 
 def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: int = 100, show_labels=True):
     fig = go.Figure()
