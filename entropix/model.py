@@ -373,7 +373,6 @@ def stream(
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     print_stream: bool = False,
-    metrics: bool = True,
     apply_chat_template: bool = True,
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
@@ -392,8 +391,7 @@ def stream(
         Tuple of (generated token text, token metrics, sampler state, complete Generation object (at the last token only))
     """
     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
-    if max_tokens is None:
-        max_tokens = model.params.max_seq_len
+    if max_tokens is None: max_tokens = model.params.max_seq_len
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
@@ -431,14 +429,11 @@ def stream(
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
-            next_token, sampler_state = sample(gen_tokens, logits, scores, sampler_cfg)
+            metrics = calculate_metrics(logits, scores)
+            next_token, sampler_state = sample(gen_tokens, logits, scores, metrics, sampler_cfg)
 
-            if metrics:
-                token_metrics = calculate_metrics(logits, scores)
-                gen_metrics.append(token_metrics)
-                sampler_states.append(sampler_state)
-            else:
-                token_metrics = None
+            gen_metrics.append(metrics)
+            sampler_states.append(sampler_state)
 
             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
             freqs_end = cur_pos + 1
@@ -451,7 +446,7 @@ def stream(
             # break after adding the stop token and its metrics to output but before adding to response text and yielding
             if torch.isin(next_token, stop_tokens).any(): break
 
-            yield token_text, token_metrics, sampler_state, None
+            yield token_text, metrics, sampler_state, None
 
         messages.append(Message(role="assistant", content=response))
         gen = GenerationData(
@@ -463,4 +458,4 @@ def stream(
             sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
         )
-        yield "", token_metrics, sampler_state, gen
+        yield "", metrics, sampler_state, gen
