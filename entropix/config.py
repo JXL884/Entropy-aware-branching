@@ -49,6 +49,7 @@ class SamplerConfig:
             "treading": True,
             # Low Entropy, High Varentropy: "exploring forks in the path"
             "exploring": True,
+            "branching": True,
             # High Entropy, High Varentropy: "resampling in the mist"
             "resampling": True,
             # extras
@@ -116,5 +117,6 @@ class SamplerState(Enum):
     FLOWING = "Flowing with unspoken intent"
     TREADING = "Treading carefully, asking clarifying questions"
     EXPLORING = "Exploring forks in the path"
+    BRANCHING = "Branch thinking in parallel"
     RESAMPLING = "Resampling in the mist"
     ADAPTIVE = "Adaptive Sampling"
