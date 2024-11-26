@@ -368,8 +368,8 @@ def generate(
                 # Determine if we need to use attention mask
                 attn = attn_mask if cur_pos < seqlen else None
 
-                print("cur_pos", cur_pos)
-                print("freqs_end", freqs_end)
+                # print("tokens", tokens)
+                # print("tokens shape", tokens.shape)
 
                 # Run the model to get logits and other outputs
                 logits, kvcache, scores, attn_stats = xfmr(
@@ -384,8 +384,6 @@ def generate(
 
                 # Use branching_sample instead of sample
                 next_tokens_list, sampler_state = branching_sample(tokens, logits, scores, sampler_cfg, can_branch=branch['can_branch'])
-                
-                
 
                 # If branching occurs
                 if len(next_tokens_list[0]) > 1 and branch['can_branch']:
@@ -397,7 +395,8 @@ def generate(
                     for sampled_token in next_tokens_list[0]:
                         print("sampled_token", sampled_token)
                         new_branch = {
-                            'tokens': torch.cat([tokens, sampled_token.unsqueeze(0).unsqueeze(0)], dim=1),
+                            #'tokens': torch.cat([tokens, sampled_token.unsqueeze(0).unsqueeze(0)], dim=1),
+                            'tokens': sampled_token,
                             'kvcache': copy.deepcopy(kvcache),
                             'cur_pos': seqlen if cur_pos < seqlen else cur_pos + 1,
                             'freqs_end': (seqlen + 1) if cur_pos < seqlen else cur_pos + 2,
@@ -409,18 +408,22 @@ def generate(
                             'iterations_left': 4,  # Already generated one token
                             'can_branch': False,   # Cannot branch during initial 5 iterations
                         }
+
                         new_branches.append(new_branch)
+
+                        if print_stream: print(model.tokenizer.decode(sampled_token.tolist()), end='', flush=True)
+                        
                 else:
                     # Continue the current branch
                     print(next_tokens_list)
-                    sampled_token = next_tokens_list[0]
+                    sampled_token = next_tokens_list
                     print("sampled_token", sampled_token)
-                    branch['tokens'] = torch.cat([tokens, sampled_token.unsqueeze(0)], dim=1)
+                    branch['tokens'] = sampled_token
                     branch['kvcache'] = kvcache
                     branch['cur_pos'] = seqlen if cur_pos < seqlen else cur_pos + 1
                     branch['freqs_end'] = (seqlen + 1) if cur_pos < seqlen else cur_pos + 2
-                    branch['response'] += model.tokenizer.decode(sampled_token.tolist())
-                    branch['gen_tokens_text'].append(model.tokenizer.decode(sampled_token.tolist()))
+                    branch['response'] += model.tokenizer.decode(sampled_token.item())
+                    branch['gen_tokens_text'].append(model.tokenizer.decode(sampled_token.item()))
                     branch['gen_metrics'].append(calculate_metrics(logits, scores))
                     branch['sampler_states'].append(sampler_state)
 
@@ -436,6 +439,8 @@ def generate(
 
                     new_branches.append(branch)
                     print("new branches: ", len(new_branches))
+
+                    if print_stream: print(model.tokenizer.decode(sampled_token.item()), end='', flush=True)
 
                     # Check for stop tokens or max tokens
                     if torch.isin(sampled_token, stop_tokens).any() or branch['cur_pos'] >= max_tokens:
@@ -571,6 +576,9 @@ def generate_ori(
 
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
+            print("next_token", next_token)
+            print("next_token shape", next_token.shape)
+            print("next_token type", type(next_token))
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
             next_token, sampler_state = sample(gen_tokens, logits, scores, sampler_cfg)
 
@@ -581,10 +589,10 @@ def generate_ori(
             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
             freqs_end = cur_pos + 1
 
-            # print("next token", next_token)
-            # print("next token shape", next_token.shape)
-            # print("gen token", gen_tokens)
-            # print("gen token shape", gen_tokens.shape)
+            print("next token", next_token)
+            print("next token shape", next_token.shape)
+            print("gen token", gen_tokens)
+            print("gen token shape", gen_tokens.shape)
 
             gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
 

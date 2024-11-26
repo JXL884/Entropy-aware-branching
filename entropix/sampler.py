@@ -98,7 +98,7 @@ def branching_sample(
     clarifying_question_token: int = 2564,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
     num_branches: int = 5,
-    can_branch: bool = True,
+    can_branch: bool = False,
 ) -> Tuple[list[torch.Tensor], SamplerState]:
     metrics = calculate_metrics(logits, attention_scores)
     ent, vent = metrics.logits_entropy, metrics.logits_varentropy
