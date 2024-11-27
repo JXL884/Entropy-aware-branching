@@ -7,6 +7,11 @@ from entropix.config import SamplerState, SamplerConfig
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
+def multinomial_sample_one(probs_sort: torch.Tensor, generator: torch.Generator | None) -> torch.Tensor:
+    """Samples one token from a multinomial distribution with sorted probabilities."""
+    q = torch.rand(probs_sort.shape, generator=generator, device=probs_sort.device)
+    return torch.argmax(probs_sort / q, dim=-1, keepdim=True).to(torch.int32)
+
 def temperature_sample(logits: torch.Tensor, temperature: float, num_samples=1, generator: torch.Generator | None = None) -> torch.Tensor:
     scaled_logits = logits / temperature
     probs = F.softmax(scaled_logits, dim=-1)
@@ -55,7 +60,66 @@ def quadratic_sample(logits: torch.Tensor, factor: float, num_samples=1, generat
     transformed_probs = transformed_probs / transformed_probs.sum(dim=-1, keepdim=True)
     return torch.multinomial(transformed_probs, num_samples=num_samples, generator=generator).to(torch.int32)
 
-def adaptive_sample(
+def adaptive_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerConfig, epsilon: float = 0.01, generator: torch.Generator | None = None) -> torch.Tensor:
+    """
+    Perform adaptive sampling by dynamically adjusting the candidate set size based on entropy and varentropy.
+    """
+    temperature = cfg.temperature * (
+        1 \
+        + metrics.logit_entropy * cfg.adaptive.temperature.logit_entropy \
+        + metrics.attn_entropy * cfg.adaptive.temperature.attn_entropy \
+        - metrics.agreement * cfg.adaptive.temperature.agreement
+    )
+
+    bsz = logits.shape[0]
+    logit = logits[:, -1]
+    probs = F.softmax(logit / temperature, dim=-1)
+
+    # Sort tokens by probability
+    sorted_probs, sorted_indices = torch.topk(probs, k=probs.shape[-1], dim=-1)
+
+    # Initialize candidate set size
+    candidate_mask = torch.zeros_like(sorted_probs, dtype=torch.bool, device=logits.device)
+    cumulative_entropy = torch.zeros(bsz, device=logits.device)
+    cumulative_varentropy = torch.zeros(bsz, device=logits.device)
+    # Initial entropy calculation
+    previous_entropy = -torch.sum(sorted_probs[0] * torch.log2(torch.clamp(sorted_probs[0], 1e-10, 1.0)))
+
+    i = 0
+    while i < sorted_probs.shape[-1]:
+        current_prob = sorted_probs[:, i]
+
+        # Update entropy and varentropy with current token
+        current_entropy = -torch.sum(current_prob * torch.log2(torch.clamp(current_prob, 1e-10, 1.0)))
+        current_varentropy = torch.sum(current_prob * (torch.log2(torch.clamp(current_prob, 1e-10, 1.0)) + cumulative_entropy.unsqueeze(-1))**2)
+
+        entropy_reduction = cumulative_entropy - current_entropy
+        varentropy_reduction = cumulative_varentropy - current_varentropy
+
+        # Update mask where entropy reduction is sufficient
+        candidate_mask[:, i] = entropy_reduction >= epsilon
+
+        # Update cumulative values
+        cumulative_entropy = torch.where(entropy_reduction >= epsilon, cumulative_entropy.clone(), current_entropy)
+        cumulative_varentropy = torch.where(entropy_reduction >= epsilon, cumulative_varentropy.clone(), current_varentropy)
+
+        # Check continuation condition
+        if not torch.any(entropy_reduction >= epsilon) or i >= sorted_probs.shape[-1] - 1:
+            break
+
+        i += 1
+
+    # Mask out tokens not in the candidate set
+    candidate_probs = sorted_probs * candidate_mask.float()
+    candidate_probs = candidate_probs / torch.sum(candidate_probs, dim=-1, keepdim=True)
+
+    # Sample from the final candidate set
+    next_token = multinomial_sample_one(candidate_probs, generator)
+    next_token_g = torch.gather(sorted_indices, -1, next_token.to(torch.int64))
+
+    return next_token_g.to(torch.int32)
+
+def adaptive_sample_e(
     logits: torch.Tensor,
     metrics: TokenMetrics,
     cfg: SamplerConfig,
@@ -168,12 +232,12 @@ def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerCo
     # top_p = cfg.top_p
     # min_p = cfg.min_p
 
-    # device = logits.device
-    # logits = logits[:, -1]
+    device = logits.device
+    logits = logits[:, -1]
 
     # # Apply temperature
     # logits = logits / temperature
-    #
+    
     # # Convert logits to probabilities
     probs = F.softmax(logits, dim=-1)
     #
@@ -270,5 +334,5 @@ def sample(
     else:  # All other cases: use adaptive sampling
         # TODO: break this out to its own function, revist how we are doing "adaptive sampling" **OR** just use a simpler sampler method
         sampler_state = SamplerState.ADAPTIVE
-        sampled_token = adaptive_sample(logits, metrics, cfg, generator)
+        sampled_token = adaptive_sample(logits, metrics, cfg, epsilon=0.1, generator=generator)
         return sampled_token, sampler_state

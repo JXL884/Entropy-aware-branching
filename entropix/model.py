@@ -125,28 +125,28 @@ def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
         for i in range(model_cfg.n_layers):
             layer_weights.append(
                 LayerWeights(
-                    # wq=w[f'{ckpt_dir}\\layers.{i}.attention.wq.weight'],
-                    # wk=w[f'{ckpt_dir}\\layers.{i}.attention.wk.weight'],
-                    # wv=w[f'{ckpt_dir}\\layers.{i}.attention.wv.weight'],
-                    # wo=w[f'{ckpt_dir}\\layers.{i}.attention.wo.weight'],
-                    # w1=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w1.weight'],
-                    # w2=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w2.weight'],
-                    # w3=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w3.weight'],
-                    # ffn_norm=w[f'{ckpt_dir}\\layers.{i}.ffn_norm.weight'],
-                    # attention_norm=w[f'{ckpt_dir}\\layers.{i}.attention_norm.weight'],
-                    wq=w[f'layers.{i}.attention.wq.weight'],
-                    wk=w[f'layers.{i}.attention.wk.weight'],
-                    wv=w[f'layers.{i}.attention.wv.weight'],
-                    wo=w[f'layers.{i}.attention.wo.weight'],
-                    w1=w[f'layers.{i}.feed_forward.w1.weight'],
-                    w2=w[f'layers.{i}.feed_forward.w2.weight'],
-                    w3=w[f'layers.{i}.feed_forward.w3.weight'],
-                    ffn_norm=w[f'layers.{i}.ffn_norm.weight'],
-                    attention_norm=w[f'layers.{i}.attention_norm.weight'],
+                    wq=w[f'{ckpt_dir}\\layers.{i}.attention.wq.weight'],
+                    wk=w[f'{ckpt_dir}\\layers.{i}.attention.wk.weight'],
+                    wv=w[f'{ckpt_dir}\\layers.{i}.attention.wv.weight'],
+                    wo=w[f'{ckpt_dir}\\layers.{i}.attention.wo.weight'],
+                    w1=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w1.weight'],
+                    w2=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w2.weight'],
+                    w3=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w3.weight'],
+                    ffn_norm=w[f'{ckpt_dir}\\layers.{i}.ffn_norm.weight'],
+                    attention_norm=w[f'{ckpt_dir}\\layers.{i}.attention_norm.weight'],
+                    # wq=w[f'layers.{i}.attention.wq.weight'],
+                    # wk=w[f'layers.{i}.attention.wk.weight'],
+                    # wv=w[f'layers.{i}.attention.wv.weight'],
+                    # wo=w[f'layers.{i}.attention.wo.weight'],
+                    # w1=w[f'layers.{i}.feed_forward.w1.weight'],
+                    # w2=w[f'layers.{i}.feed_forward.w2.weight'],
+                    # w3=w[f'layers.{i}.feed_forward.w3.weight'],
+                    # ffn_norm=w[f'layers.{i}.ffn_norm.weight'],
+                    # attention_norm=w[f'layers.{i}.attention_norm.weight'],
                 )
             )
-        # xfmr_weights = XfmrWeights(tok_embeddings=w[f'{ckpt_dir}\\tok_embeddings.weight'], norm=w[f'{ckpt_dir}\\norm.weight'], output=w[f'{ckpt_dir}\\output.weight'], layer_weights=layer_weights)
-        xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
+        xfmr_weights = XfmrWeights(tok_embeddings=w[f'{ckpt_dir}\\tok_embeddings.weight'], norm=w[f'{ckpt_dir}\\norm.weight'], output=w[f'{ckpt_dir}\\output.weight'], layer_weights=layer_weights)
+        #xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
         return xfmr_weights
 
 ################################################################################
@@ -357,7 +357,7 @@ def generate(
         kvcache = KVCache.new(model.params.n_layers, bs, model.params.max_seq_len, model.params.n_local_kv_heads, model.params.head_dim).to(device)
 
         freqs_end = seqlen
-        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
+        # gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
 
         # response = ""
         # gen_tokens_text = []
@@ -409,7 +409,7 @@ def generate(
                     print("branching")
                     print("sampled:")
                     print(tokens)
-                    for token in tokens[0]:  # TODO: why is this indexed???? seems wrong
+                    for token in tokens[0]:  # TODO: why is this indexed???? seems wrong  -> {I think the shape of tokens is [[num_tokens]], so we need [0] to interate over the first dimension?}
                         token_text = model.tokenizer.decode([token.item()])  # type: ignore (torch.int32 not recognized as int)
                         new_branches.append(
                             Branch(
@@ -426,6 +426,7 @@ def generate(
                                 can_branch=False,
                             )
                         )
+
                         if print_stream:  #print(token_text, end='', flush=True)
                             rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
 
@@ -449,8 +450,8 @@ def generate(
                         branch.iterations_left -= 1
                         if branch.iterations_left == 0:
                             complete_branches.append(branch)
-                    # else:  # allow new main branches to branch themselves
-                    #     branch.can_branch = True
+                    else:  # allow new main branches to branch themselves
+                        branch.can_branch = True
 
                     new_branches.append(branch)  # TODO: why? this seems wrong?
 
@@ -479,7 +480,7 @@ def generate(
                 if not any(branch.active for branch in branches):
                     print("no active branches")
 
-            branches = [branch for branch in branches if branch.active]
+            branches = [branch for branch in new_branches if branch.active]
             iterations += 1
             if do_break: break
         
@@ -701,9 +702,9 @@ def stream(
 
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
-            print("next_token", next_token)
-            print("next_token shape", next_token.shape)
-            print("next_token type", type(next_token))
+            # print("next_token", next_token)
+            # print("next_token shape", next_token.shape)
+            # print("next_token type", type(next_token))
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
             metrics = calculate_metrics(logits, scores)
             next_token, sampler_state = sample(gen_tokens, logits, scores, metrics, sampler_cfg)

@@ -10,27 +10,28 @@ messages = [
 ]
 sampler_cfg = SamplerConfig() # using default config
 
-for model_params in (LLAMA_1B, SMOLLM_360M):
-    print()
-    print("=" * 80)
-    print(model_params.name)
-    print("=" * 80)
+#for model_params in (LLAMA_1B, SMOLLM_360M):
+model_params = LLAMA_1B
+print()
+print("=" * 80)
+print(model_params.name)
+print("=" * 80)
 
-    download_weights(model_params)
+#download_weights(model_params)
 
-    weights_path = f"weights/{model_params.name}"  # default location weights get saved to
-    tokenizer_path = f"weights/tokenizers/{model_params.name}.json"  # default location tokenizer gets saved to
+weights_path = f"weights/{model_params.name}"  # default location weights get saved to
+tokenizer_path = f"weights/tokenizers/{model_params.name}.json"  # default location tokenizer gets saved to
 
-    tokenizer = Tokenizer(tokenizer_path)
-    weights = load_weights(weights_path, model_params)
-    model = Model(weights, model_params, tokenizer)
+tokenizer = Tokenizer(tokenizer_path)
+weights = load_weights(weights_path, model_params)
+model = Model(weights, model_params, tokenizer)
 
-    print(f"\nUSER: {messages[1]['content']}")
+print(f"\nUSER: {messages[1]['content']}")
 
-    gen_data = generate(messages, model, sampler_cfg, print_stream=True)
+gen_data = generate(messages, model, sampler_cfg, print_stream=True)
 
-    gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
+gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
 
-    print()
-    # plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
-    # plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")
+print()
+# plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
+# plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")
