@@ -1,10 +1,14 @@
 # Entropix
 
-`pytorch` only refactor and API cleanup of [xjdr's entropix project](https://github.com/xjdr-alt/entropix), pulling from [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for entropy plotting.
+Heavily altered fork of [xjdr's entropix project](https://github.com/xjdr-alt/entropix). Thanks to [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for the basis of the visualizations.
 
 Supports `llama` and `smollm` models & easy to add more.
 
-![image](https://github.com/user-attachments/assets/6a3d9d1d-7201-4a72-a2dd-640d7582c56d)
+![image](https://github.com/user-attachments/assets/a8fea50c-4f2e-419c-a0d4-891da04bb2b8)
+![image](https://github.com/user-attachments/assets/17dd8a1f-fbdc-4fe3-9a80-353a027a16b9)
+![image](https://github.com/user-attachments/assets/34add226-6dfe-49f4-ab2f-2209f712304c)
+
+
 
 ## Getting Started
 
@@ -22,12 +26,14 @@ Supports `llama` and `smollm` models & easy to add more.
   ```bash
   uv pip install --project pyproject.toml .
   ```
-5. Run it
+5. Run model inference (see `run.py` for usage)
   ```bash
   python run.py
   ```
-
-_There's also my `shell.nix` if you're a fellow nix enjoyer. You'll have to change the venv bits in the `shellHook` for yourself though._
+6. Plot & experiment with responses
+```bash
+entropix-dashboard
+```
 
 ## About Entropix
 

@@ -1,6 +1,8 @@
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, NamedTuple, Optional
+from typing import NamedTuple, Optional
+
 import torch
 
 DEFAULT_MASK_VALUE = -0.7 * float(torch.finfo(torch.float32).max)
@@ -39,84 +41,96 @@ class CLIConfig:
             if self.max_tokens < 1 or self.max_tokens > 2048:
                 raise ValueError("max_tokens must be between 1 and 2048")
 
+class SamplerState(Enum):
+    ARGMAX = "Argmax"
+    ADAPTIVE = "Adaptive sampling"
+    TEMPERATURE = "Temperature sampling"
+    PAUSE = "Pausing to think"
+    BRANCHING = "Branching"
+
+STATE_COLOR_MAP = {
+    SamplerState.ARGMAX: '#FF8C9F',  # pink
+    SamplerState.TEMPERATURE: '#FFA500',  # orange
+    SamplerState.ADAPTIVE: '#800080',  # purple
+    SamplerState.PAUSE: '#90EE90',  # lightgreen
+    SamplerState.BRANCHING: '#ADD8E6',  # lightblue
+}
+
 @dataclass
 class SamplerConfig:
-    states: dict[str, bool] = field(
-        default_factory=lambda: {
-            # Low Entropy, Low Varentropy: "flowing with unspoken intent"
-            "flowing": True,
-            # High Entropy, Low Varentropy: "treading carefully, asking clarifying questions"
-            "treading": True,
-            # Low Entropy, High Varentropy: "exploring forks in the path"
-            "exploring": True,
-            "branching": True,
-            # High Entropy, High Varentropy: "resampling in the mist"
-            "resampling": True,
-            # extras
-            "agreement": False,
-            "interaction_strength": False,
-        }
-    )
-
-    # Sampler state extras
     temperature: float = 0.666
     top_p: float = 0.90
     top_k: float = 27
     min_p: float = 0.03
 
-    low_logits_entropy_threshold: float = 0.6
-    medium_logits_entropy_threshold: float = 1.584
-    high_logits_entropy_threshold: float = 2.17
+    class ThresholdLevel(NamedTuple):
+        low: float
+        medium: float
+        high: float
 
-    low_logits_varentropy_threshold: float = 3.28
-    medium_logits_varentropy_threshold: float = 3.85
-    high_logits_varentropy_threshold: float = 6.18
+    class Thresholds(NamedTuple):
+        logit_entropy: "SamplerConfig.ThresholdLevel"
+        logit_varentropy: "SamplerConfig.ThresholdLevel"
+        attn_entropy: "SamplerConfig.ThresholdLevel"
+        attn_varentropy: "SamplerConfig.ThresholdLevel"
+        agreement: "SamplerConfig.ThresholdLevel"
+        interaction_strength: "SamplerConfig.ThresholdLevel"
 
-    low_attention_entropy_threshold: float = 8.989
-    medium_attention_entropy_threshold: float = 8.99
-    high_attention_entropy_threshold: float = 8.991
+    thresholds = Thresholds(
+        logit_entropy=ThresholdLevel(low=0.6, medium=1.584, high=2.17),
+        # logit_varentropy=ThresholdLevel(low=3.28, medium=3.85, high=6.18), # original
+        logit_varentropy=ThresholdLevel(low=1.584, medium=3.28, high=5.50), # lowered
+        attn_entropy=ThresholdLevel(low=8.989, medium=8.99, high=8.991),
+        attn_varentropy=ThresholdLevel(low=5.212, medium=5.9125, high=6.92),
+        agreement=ThresholdLevel(low=2e-06, medium=4e-06, high=5e-06),
+        interaction_strength=ThresholdLevel(low=0.2, medium=0.247, high=0.264),
+    )
 
-    low_attention_varentropy_threshold: float = 5.212
-    medium_attention_varentropy_threshold: float = 5.9125
-    high_attention_varentropy_threshold: float = 6.92
+    class AdaptiveCoefficients(NamedTuple):
+        logit_entropy: float = 0.0
+        logit_varentropy: float = 0.0
+        attn_entropy: float = 0.0
+        attn_varentropy: float = 0.0
+        agreement: float = 0.0
+        interaction_strength: float = 0.0
 
-    low_agreement_threshold: float = 2e-06
-    medium_agreement_threshold: float = 4e-06
-    high_agreement_threshold: float = 5e-06
+    class Adaptive(NamedTuple):
+        n_samples: int
+        temperature: "SamplerConfig.AdaptiveCoefficients"
+        top_p: "SamplerConfig.AdaptiveCoefficients"
+        top_k: "SamplerConfig.AdaptiveCoefficients"
+        min_p: "SamplerConfig.AdaptiveCoefficients"
+        score: "SamplerConfig.AdaptiveCoefficients"
 
-    low_interaction_strength_threshold: float = 0.2
-    medium_interaction_strength_threshold: float = 0.247
-    high_interaction_strength_threshold: float = 0.264
+    adaptive = Adaptive(
+        n_samples=5,
+        temperature=AdaptiveCoefficients(logit_entropy=0.3, attn_entropy=0.2, agreement=0.2),
+        top_p=AdaptiveCoefficients(attn_varentropy=0.1),
+        top_k=AdaptiveCoefficients(interaction_strength=0.3, agreement=0.2),
+        min_p=AdaptiveCoefficients(logit_varentropy=0.5),
+        score=AdaptiveCoefficients(logit_entropy=0.1, attn_entropy=0.2, logit_varentropy=0.3, attn_varentropy=0.4, agreement=0.5, interaction_strength=0.6),
+    )
 
-    high_entropy_attention_offset: float = 1.3
-    high_entropy_attention_coefficient: float = 0.2
+    class Offsets(NamedTuple):
+        high_entropy_attn: float = 1.3
+        low_entropy_interaction_strength: float = 1.2
+        high_entropy_varentropy_attn: float = 2.0
 
-    low_entropy_interaction_strength_offset: float = 1.2
-    low_entropy_interaction_strength_coefficient: float = 0.3
+    class Coefficients(NamedTuple):
+        high_entropy_attn: float = 0.2
+        low_entropy_interaction_strength: float = 0.3
+        high_entropy_varentropy_attn: float = 0.5
 
-    high_entropy_varentropy_attention_offset: float = 2.0
-    high_entropy_varentropy_attention_coefficient: float = 0.5
+    offsets = Offsets()
+    coefficients = Coefficients()
 
-    n_adaptive_samples: float = 5
+    class Branching(NamedTuple):
+        num_samples: int = 5
 
-    adaptive_temperature_logits_coefficient: float = 0.3
-    adaptive_temperature_attention_coefficient: float = 0.2
-    adaptive_temperature_agreement_coefficient: float = 0.2
-    adaptive_top_p_coefficient: float = 0.1
-    adaptive_top_k_interaction_coefficient: float = 0.3
-    adaptive_top_k_agreement_coefficient: float = 0.2
-    adaptive_min_p_coefficient: float = 0.5
-    adaptive_score_logits_entropy_coefficient: float = 0.1
-    adaptive_score_attention_entropy_coefficient: float = 0.2
-    adaptive_score_logits_varentropy_coefficient: float = 0.3
-    adaptive_score_attention_varentropy_coefficient: float = 0.4
-    adaptive_score_agreement_coefficient: float = 0.5
-    adaptive_score_interaction_strength_coefficient: float = 0.6
+    branching = Branching()
 
-class SamplerState(Enum):
-    FLOWING = "Flowing with unspoken intent"
-    TREADING = "Treading carefully, asking clarifying questions"
-    EXPLORING = "Exploring forks in the path"
-    BRANCHING = "Branch thinking in parallel"
-    RESAMPLING = "Resampling in the mist"
-    ADAPTIVE = "Adaptive Sampling"
+    @classmethod
+    def load(cls, path: str):
+        with open(path, "r") as f:
+            config = json.load(f)
+        return cls(**config)

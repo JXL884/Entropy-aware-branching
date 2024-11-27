@@ -7,8 +7,8 @@ LN_2 = 0.69314718056  # ln(2) = 1.0 / LOG2_E
 
 @dataclass
 class TokenMetrics:
-    logits_entropy: float
-    logits_varentropy: float
+    logit_entropy: float
+    logit_varentropy: float
     attn_entropy: float
     attn_varentropy: float
     agreement: float
@@ -36,22 +36,22 @@ def calculate_metrics(logits: torch.Tensor, attention_scores: torch.Tensor) -> T
     interaction_strength = torch.mean(torch.abs(attention_scores), dim=(1, 2, 3))
 
     return TokenMetrics(
-        logits_entropy=torch.mean(entropy).item(),
-        logits_varentropy=torch.mean(varentropy).item(),
+        logit_entropy=torch.mean(entropy).item(),
+        logit_varentropy=torch.mean(varentropy).item(),
         attn_entropy=torch.mean(attn_entropy).item(),
         attn_varentropy=torch.mean(attn_varentropy).item(),
         agreement=torch.mean(agreement).item(),
         interaction_strength=interaction_strength.item()
     )
 
-class AttnStats(NamedTuple):
+class AttnMetrics(NamedTuple):
     entropy: torch.Tensor  # (bsz, n_layers, num_heads)
     varentropy: torch.Tensor  # (bsz, n_layers, num_heads)
     n_layers: int
     n_heads: int
 
     @classmethod
-    def new(cls, bsz: int, n_layers: int, n_heads: int, device: torch.device) -> 'AttnStats':
+    def new(cls, bsz: int, n_layers: int, n_heads: int, device: torch.device) -> 'AttnMetrics':
         return cls(
             entropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),
             varentropy=torch.zeros((bsz, n_layers, n_heads), dtype=torch.float32, device=device),

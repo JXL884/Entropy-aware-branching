@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 import queue
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,20 +10,16 @@ import dash_bootstrap_components as dbc
 import tyro
 from dash import (
     ALL,
-    ClientsideFunction,
     Input,
     Output,
     State,
     callback,
-    clientside_callback,
     dcc,
     html,
 )
 
-from entropix.config import SamplerConfig, SamplerState
-from entropix.model import GenerationData, Model, generate, load_weights, stream
-
-# Import your existing plot functions
+from entropix.config import SamplerConfig, STATE_COLOR_MAP
+from entropix.model import GenerationData, Model, load_weights, stream
 from entropix.models.llama import LLAMA_1B
 from entropix.plot import plot2d, plot3d
 from entropix.tokenizer import Message, Tokenizer
@@ -241,10 +236,7 @@ def update_messages(data, current_messages):
         if msg.role == "assistant" and i == len(gen_data.messages) - 1:
             tokens_html = []
             for token, state in zip(gen_data.tokens, gen_data.sampler_states):
-                color = {
-                    SamplerState.FLOWING: '#87CEEB', SamplerState.TREADING: '#90EE90', SamplerState.EXPLORING: '#FFA500', SamplerState.RESAMPLING: '#FFB6C1',
-                    SamplerState.ADAPTIVE: '#800080'
-                }[state]
+                color = STATE_COLOR_MAP[state]
                 tokens_html.append(html.Span(token, style={'color': color}))
             content = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
         else:
@@ -445,7 +437,7 @@ def update_output(contents):
         return new_data
 
     except Exception as e:
-        print(f"Error processing file: {str(e)}")
+        print(f"Error processing file: {e!s}")
         raise dash.exceptions.PreventUpdate
 
 @callback(
