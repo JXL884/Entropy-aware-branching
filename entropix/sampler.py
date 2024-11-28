@@ -152,7 +152,7 @@ def adaptive_sample(
 
 def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerConfig, generator: torch.Generator | None = None) -> torch.Tensor:
     """
-    Samples multiple tokens from the given logits using temperature, top_p, top_k, and min_p sampling.
+    Samples multiple tokens from the given logits using temperature sampling.
 
     Args:
         logits: Tensor of shape [vocab_size].
@@ -168,6 +168,7 @@ def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerCo
     temp_adj = cfg.offsets.low_entropy_interaction_strength + cfg.coefficients.low_entropy_interaction_strength * metrics.interaction_strength
     temperature = min(1.5, cfg.temperature * temp_adj)
 
+    # NOTE: only using temperature sampling in branches right now
     # TODO: cleanup / setup AB tests to find best branch sampling method
 
     # top_k = max(5, int(cfg.top_k * (1 + 0.5 * (1 - metrics.agreement))))
