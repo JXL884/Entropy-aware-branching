@@ -125,15 +125,6 @@ def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
         for i in range(model_cfg.n_layers):
             layer_weights.append(
                 LayerWeights(
-                    # wq=w[f'{ckpt_dir}\\layers.{i}.attention.wq.weight'],
-                    # wk=w[f'{ckpt_dir}\\layers.{i}.attention.wk.weight'],
-                    # wv=w[f'{ckpt_dir}\\layers.{i}.attention.wv.weight'],
-                    # wo=w[f'{ckpt_dir}\\layers.{i}.attention.wo.weight'],
-                    # w1=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w1.weight'],
-                    # w2=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w2.weight'],
-                    # w3=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w3.weight'],
-                    # ffn_norm=w[f'{ckpt_dir}\\layers.{i}.ffn_norm.weight'],
-                    # attention_norm=w[f'{ckpt_dir}\\layers.{i}.attention_norm.weight'],
                     wq=w[f'layers.{i}.attention.wq.weight'],
                     wk=w[f'layers.{i}.attention.wk.weight'],
                     wv=w[f'layers.{i}.attention.wv.weight'],
@@ -145,7 +136,6 @@ def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
                     attention_norm=w[f'layers.{i}.attention_norm.weight'],
                 )
             )
-        # xfmr_weights = XfmrWeights(tok_embeddings=w[f'{ckpt_dir}\\tok_embeddings.weight'], norm=w[f'{ckpt_dir}\\norm.weight'], output=w[f'{ckpt_dir}\\output.weight'], layer_weights=layer_weights)
         xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
         return xfmr_weights
 
