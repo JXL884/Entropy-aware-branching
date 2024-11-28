@@ -117,7 +117,7 @@ def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
     sep = '\\' if os.name == 'nt' else '/'
     with torch.inference_mode():
         for file in ckpt_dir.glob("*.npy"):
-            name = '.'.join(str(file).split('/')[-1].split('.')[:-1])
+            name = '.'.join(str(file).split(sep)[-1].split('.')[:-1])
             jax_weight = jnp.load(file=file, mmap_mode='r', allow_pickle=True)
             np_weight = np.array(jax_weight).astype(np.float32)
             weight = torch.from_numpy(np_weight).to(torch.bfloat16).to(device)
@@ -125,28 +125,28 @@ def load_weights(ckpt_dir: Path | str, model_cfg: ModelParams) -> XfmrWeights:
         for i in range(model_cfg.n_layers):
             layer_weights.append(
                 LayerWeights(
-                    wq=w[f'{ckpt_dir}\\layers.{i}.attention.wq.weight'],
-                    wk=w[f'{ckpt_dir}\\layers.{i}.attention.wk.weight'],
-                    wv=w[f'{ckpt_dir}\\layers.{i}.attention.wv.weight'],
-                    wo=w[f'{ckpt_dir}\\layers.{i}.attention.wo.weight'],
-                    w1=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w1.weight'],
-                    w2=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w2.weight'],
-                    w3=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w3.weight'],
-                    ffn_norm=w[f'{ckpt_dir}\\layers.{i}.ffn_norm.weight'],
-                    attention_norm=w[f'{ckpt_dir}\\layers.{i}.attention_norm.weight'],
-                    # wq=w[f'layers.{i}.attention.wq.weight'],
-                    # wk=w[f'layers.{i}.attention.wk.weight'],
-                    # wv=w[f'layers.{i}.attention.wv.weight'],
-                    # wo=w[f'layers.{i}.attention.wo.weight'],
-                    # w1=w[f'layers.{i}.feed_forward.w1.weight'],
-                    # w2=w[f'layers.{i}.feed_forward.w2.weight'],
-                    # w3=w[f'layers.{i}.feed_forward.w3.weight'],
-                    # ffn_norm=w[f'layers.{i}.ffn_norm.weight'],
-                    # attention_norm=w[f'layers.{i}.attention_norm.weight'],
+                    # wq=w[f'{ckpt_dir}\\layers.{i}.attention.wq.weight'],
+                    # wk=w[f'{ckpt_dir}\\layers.{i}.attention.wk.weight'],
+                    # wv=w[f'{ckpt_dir}\\layers.{i}.attention.wv.weight'],
+                    # wo=w[f'{ckpt_dir}\\layers.{i}.attention.wo.weight'],
+                    # w1=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w1.weight'],
+                    # w2=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w2.weight'],
+                    # w3=w[f'{ckpt_dir}\\layers.{i}.feed_forward.w3.weight'],
+                    # ffn_norm=w[f'{ckpt_dir}\\layers.{i}.ffn_norm.weight'],
+                    # attention_norm=w[f'{ckpt_dir}\\layers.{i}.attention_norm.weight'],
+                    wq=w[f'layers.{i}.attention.wq.weight'],
+                    wk=w[f'layers.{i}.attention.wk.weight'],
+                    wv=w[f'layers.{i}.attention.wv.weight'],
+                    wo=w[f'layers.{i}.attention.wo.weight'],
+                    w1=w[f'layers.{i}.feed_forward.w1.weight'],
+                    w2=w[f'layers.{i}.feed_forward.w2.weight'],
+                    w3=w[f'layers.{i}.feed_forward.w3.weight'],
+                    ffn_norm=w[f'layers.{i}.ffn_norm.weight'],
+                    attention_norm=w[f'layers.{i}.attention_norm.weight'],
                 )
             )
-        xfmr_weights = XfmrWeights(tok_embeddings=w[f'{ckpt_dir}\\tok_embeddings.weight'], norm=w[f'{ckpt_dir}\\norm.weight'], output=w[f'{ckpt_dir}\\output.weight'], layer_weights=layer_weights)
-        #xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
+        # xfmr_weights = XfmrWeights(tok_embeddings=w[f'{ckpt_dir}\\tok_embeddings.weight'], norm=w[f'{ckpt_dir}\\norm.weight'], output=w[f'{ckpt_dir}\\output.weight'], layer_weights=layer_weights)
+        xfmr_weights = XfmrWeights(tok_embeddings=w['tok_embeddings.weight'], norm=w['norm.weight'], output=w['output.weight'], layer_weights=layer_weights)
         return xfmr_weights
 
 ################################################################################
