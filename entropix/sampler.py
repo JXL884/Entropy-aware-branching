@@ -222,12 +222,13 @@ def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerCo
 
     # Sample tokens
     # sampled_tokens = torch.multinomial(probs, num_samples=num_samples_to_draw, generator=generator)
-    sampled_tokens = temperature_sample(logits, temperature=temperature, num_samples=num_samples_to_draw, generator=generator)
 
-    return sampled_tokens.to(torch.int32)  # Shape: [num_samples]
+    # currently the shape is [[num_samples]] help me flatten it to just [num_samples]
+    sampled_tokens = temperature_sample(logits, temperature=temperature, num_samples=num_samples_to_draw, generator=generator)
+    # sampled_tokens = sampled_tokens.squeeze(0)  # Remove the extra dimension
+    return sampled_tokens.to(torch.int32)  
 
 def sample(
-    gen_tokens: torch.Tensor,  # tokens generated so far
     logits: torch.Tensor,  # logits (distribution over all possible choices) of the next token
     attention_scores: torch.Tensor,  # internal attention scores (Q⋅Kᵀ)/√d
     metrics: TokenMetrics,

@@ -9,6 +9,7 @@ import copy
 
 import jax.numpy as jnp
 import numpy as np
+from scipy.special import kv
 import torch
 import torch.nn.functional as F
 from rich import print as rprint
@@ -79,7 +80,8 @@ class GenerationData:
             "tokens": self.tokens,
             "messages": [m.model_dump() for m in self.messages],
             "metrics": [asdict(m) for m in self.metrics],
-            "sampler_cfg": asdict(self.sampler_cfg),
+            # "sampler_cfg": asdict(self.sampler_cfg),
+            "sampler_cfg": self.sampler_cfg.model_dump(),
             "sampler_states": [s.name for s in self.sampler_states],
         }
 
@@ -102,7 +104,8 @@ class GenerationData:
     def from_dict(cls, data: dict[str, Any]):
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
         data["messages"] = [Message(**m) for m in data["messages"]]
-        data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
+        # data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
+        data["sampler_cfg"] = SamplerConfig.from_dict(data["sampler_cfg"])
         data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)
 
@@ -279,19 +282,28 @@ def build_attn_mask(seqlen: int, start_pos: int) -> torch.Tensor:
 
 @dataclass
 class Branch:
-    tokens: torch.Tensor
+    tokens: torch.Tensor | list
     kvcache: KVCache
     cur_pos: int
-    freqs_end: int
-    response: str
-    gen_tokens_text: list[str] = field(default_factory=list)
-    gen_metrics: list[TokenMetrics] = field(default_factory=list)
+    # freqs_end: int
+    # response: str
+    tokens_text: list[str] = field(default_factory=list)
+    metrics: list[TokenMetrics] = field(default_factory=list)
     sampler_states: list[SamplerState] = field(default_factory=list)
-    active: bool = True
-    iterations_left: int | None = None
-    can_branch: bool = False
 
-def generate(
+    # active: bool = True
+    # iterations_left: int | None = None
+    # can_branch: bool = False
+
+    def to_dict(self):
+        return {
+            "tokens": self.tokens,
+            "tokens_text": self.tokens_text,
+            "metrics": [asdict(m) for m in self.metrics],
+            "sampler_states": [s.name for s in self.sampler_states],
+        }
+
+def old_generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore (allow definition to be overriden after type conversion)
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
@@ -355,22 +367,7 @@ def generate(
         # sampler_states = []
 
         do_break = False
-        branches = [
-            # {
-            #     'tokens': tokens,
-            #     'kvcache': kvcache,
-            #     'cur_pos': 0,
-            #     'freqs_end': freqs_end,
-            #     'response': "",
-            #     'gen_tokens_text': [],
-            #     'gen_metrics': [],
-            #     'sampler_states': [],
-            #     'active': True,
-            #     'iterations_left': None,  # Not in initial 5-iteration period
-            #     'can_branch': False,
-            # }
-            Branch(tokens=tokens, kvcache=kvcache, cur_pos=0, freqs_end=freqs_end, response="")
-        ]
+        branches = [Branch(tokens=tokens, kvcache=kvcache, cur_pos=0, freqs_end=freqs_end, response="")]
         iterations = 0
 
         while iterations < max_tokens and any(branch.active for branch in branches):
@@ -379,7 +376,6 @@ def generate(
             new_branches = []
 
             for branch in branches:
-                # tokens, kvcache, cur_pos, freqs_end, response, gen_tokens_text, gen_metrics, sampler_states, active, iterations_left, can_branch = branch
                 if not branch.active: continue
 
                 attn = attn_mask if branch.cur_pos < seqlen else None
@@ -393,13 +389,13 @@ def generate(
                     attn_mask=attn,
                 )
                 metrics = calculate_metrics(logits, scores)
-                tokens, sampler_state = sample(branch.tokens, logits, scores, metrics, sampler_cfg, can_branch=branch.can_branch)
+                tokens, sampler_state = sample(logits, scores, metrics, sampler_cfg, can_branch=branch.can_branch)
 
                 if sampler_state == SamplerState.BRANCHING:
                     print("branching")
                     print("sampled:")
                     print(tokens)
-                    for token in tokens[0]:  # TODO: why is this indexed???? seems wrong  -> {I think the shape of tokens is [[num_tokens]], so we need [0] to interate over the first dimension?}
+                    for token in tokens[0]:
                         token_text = model.tokenizer.decode([token.item()])  # type: ignore (torch.int32 not recognized as int)
                         new_branches.append(
                             Branch(
@@ -417,10 +413,11 @@ def generate(
                             )
                         )
 
-                        if print_stream:  #print(token_text, end='', flush=True)
+                        if print_stream:
                             rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
 
                 else:  # continue sampling on the current branch
+                    print(tokens)
                     token = tokens
                     token_text = model.tokenizer.decode([token.item()])  # type: ignore (torch.int32 not recognized as int)
 
@@ -445,7 +442,7 @@ def generate(
 
                     new_branches.append(branch)  # TODO: why? this seems wrong?
 
-                    if torch.isin(token, stop_tokens).any() or branch.cur_pos >= max_tokens: 
+                    if torch.isin(token, stop_tokens).any() or branch.cur_pos >= max_tokens:
                         do_break = True
                         break
 
@@ -473,7 +470,7 @@ def generate(
             branches = [branch for branch in new_branches if branch.active]
             iterations += 1
             if do_break: break
-        
+
         # TODO: this all seems wrong-ish
         final_branches = [branch for branch in branches if branch.active]
         print("final_branches")
@@ -481,7 +478,7 @@ def generate(
         print("branches")
         print(len(branches))
 
-        if len(final_branches) == 0: 
+        if len(final_branches) == 0:
             print("setting final_branches to branches")
             print("does this make sense:", final_branches != branches)
             final_branches = branches
@@ -490,148 +487,16 @@ def generate(
 
         # TODO: add branches
         return GenerationData(
-                prompt=prompt,
-                response=final_branches[-1].response,
-                tokens=final_branches[-1].gen_tokens_text,
-                messages=messages,
-                metrics=final_branches[-1].gen_metrics,
-                sampler_cfg=sampler_cfg,
-                sampler_states=final_branches[-1].sampler_states,
+            prompt=prompt,
+            response=final_branches[-1].response,
+            tokens=final_branches[-1].gen_tokens_text,
+            messages=messages,
+            metrics=final_branches[-1].gen_metrics,
+            sampler_cfg=sampler_cfg,
+            sampler_states=final_branches[-1].sampler_states,
         )
 
-
-
-
-        #     gen_metrics.append(metrics)
-        #     sampler_states.append(sampler_state)
-        #
-        #     cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-        #     freqs_end = cur_pos + 1
-        #
-        #     gen_tokens = torch.cat((gen_tokens, tokens), dim=1)
-        #
-        #     token_text = model.tokenizer.decode([tokens.item()])  # type: ignore (torch.int32 not recognized as int)
-        #     gen_tokens_text.append(token_text)
-        #
-        #     # break after adding the stop token and its metrics to output but before adding to response text / printing
-        #     if torch.isin(tokens, stop_tokens).any(): break
-        #
-        #     if print_stream:  #print(token_text, end='', flush=True)
-        #         rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
-        #     response += token_text
-        # if print_stream: print()
-        #
-        # messages.append(Message(role="assistant", content=response))
-        # return GenerationData(
-        #     prompt=prompt,
-        #     response=response,
-        #     tokens=gen_tokens_text,
-        #     messages=messages,
-        #     metrics=gen_metrics,
-        #     sampler_cfg=sampler_cfg,
-        #     sampler_states=sampler_states,
-        # )
-
-# def generate(
-#     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore (allow definition to be overriden after type conversion)
-#     model: Model,
-#     sampler_cfg: SamplerConfig | None = None,
-#     max_tokens: int | None = None,
-#     print_stream: bool = False,
-#     apply_chat_template: bool = True,
-# ) -> GenerationData:
-#     """
-#     Generate text using the transformer model.
-#
-#     Args:
-#         messages: Input messages or a string prompt
-#         model: Model to use for generation
-#         sampler_cfg: Sampler configuration
-#         max_tokens: Maximum number of tokens to generate
-#         print_stream: Optional, default False. Flag to print the generated tokens to the console
-#         apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
-#
-#     Returns:
-#         GenerationData: A dataclass containing the generated text, tokens, messages, metrics, sampler configuration, and sampler states
-#     """
-#     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
-#     if max_tokens is None: max_tokens = model.params.max_seq_len
-#     if sampler_cfg is None:
-#         logging.warning("No sampler config provided, using default config")
-#         sampler_cfg = SamplerConfig()
-#
-#     if isinstance(messages, str):
-#         prompt = messages
-#         messages = [Message(role="system", content=prompt)]
-#         logging.warning("entropix.model.generate: prompt passed as a string, cannot save messages to output GenerationData.")
-#     elif isinstance(messages, list) and isinstance(messages[0], dict):  # convert list[dict] to list[Message] so all messages are validated
-#         messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
-#
-#     assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
-#     messages: list[Message] = messages  # type: ignore
-#     if apply_chat_template:
-#         prompt = model.tokenizer.apply_chat_template(messages)
-#
-#     if print_stream:
-#         print()
-#         for state, color in STATE_COLOR_MAP.items():
-#             rprint(f"[{color}]■[/] [dim]{state.value}[/]")
-#         print()
-#
-#     with torch.inference_mode():
-#         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
-#         bs, seqlen = tokens.shape
-#         cur_pos = 0
-#
-#         attn_mask = build_attn_mask(seqlen, cur_pos)
-#         freqs_cis = precompute_freqs_cis(model.params.head_dim, model.params.max_seq_len, model.params.rope_theta, model.params.use_scaled_rope)
-#         kvcache = KVCache.new(model.params.n_layers, bs, model.params.max_seq_len, model.params.n_local_kv_heads, model.params.head_dim).to(device)
-#
-#         freqs_end = seqlen
-#         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
-#
-#         response = ""
-#         gen_tokens_text = []
-#         gen_metrics = []
-#         sampler_states = []
-#
-#         while cur_pos < max_tokens:
-#             attn = attn_mask if cur_pos < seqlen else None
-#             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, tokens, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
-#             metrics = calculate_metrics(logits, scores)
-#             tokens, sampler_state = sample(gen_tokens, logits, scores, metrics, sampler_cfg)
-#
-#             gen_metrics.append(metrics)
-#             sampler_states.append(sampler_state)
-#
-#             cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-#             freqs_end = cur_pos + 1
-#
-#             gen_tokens = torch.cat((gen_tokens, tokens), dim=1)
-#
-#             token_text = model.tokenizer.decode([tokens.item()])  # type: ignore (torch.int32 not recognized as int)
-#             gen_tokens_text.append(token_text)
-#
-#             # break after adding the stop token and its metrics to output but before adding to response text / printing
-#             if torch.isin(tokens, stop_tokens).any(): break
-#
-#             if print_stream:  #print(token_text, end='', flush=True)
-#                 rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
-#             response += token_text
-#         if print_stream: print()
-#
-#         messages.append(Message(role="assistant", content=response))
-#         return GenerationData(
-#             prompt=prompt,
-#             response=response,
-#             tokens=gen_tokens_text,
-#             messages=messages,
-#             metrics=gen_metrics,
-#             sampler_cfg=sampler_cfg,
-#             sampler_states=sampler_states,
-#         )
-
-def stream(
+def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
@@ -640,22 +505,21 @@ def stream(
     apply_chat_template: bool = True,
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
-    Stream generated text using the transformer model.
+    Core function to generate text using the transformer model and stream the response out.
 
     Args:
         messages: Input messages or a string prompt
         model: Model to use for generation
         sampler_cfg: Sampler configuration
-        max_tokens: Maximum number of tokens to generate
+        max_tokens: Optional, defaults None. Maximum number of tokens to generate, or the max sequence length of the model if None.
         print_stream: Optional, default False. Flag to print the generated tokens to the console
-        metrics: Optional, default True. Flag to calculate and return entropy metrics
         apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
 
     Yields:
         Tuple of (generated token text, token metrics, sampler state, complete Generation object (at the last token only))
     """
     stop_tokens = torch.tensor(model.tokenizer.stop_token_ids, device=device, dtype=torch.int32)
-    if max_tokens is None: max_tokens = model.params.max_seq_len
+    if max_tokens is None or max_tokens > model.params.max_seq_len: max_tokens = model.params.max_seq_len
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
@@ -663,61 +527,140 @@ def stream(
     if isinstance(messages, str):
         prompt = messages
         messages = [Message(role="system", content=prompt)]
-        logging.warning("entropix.model.generate: prompt passed as a string, cannot save messages to output GenerationData.")
+        logging.warning("entropix.model._generate: prompt passed as a string, cannot save messages to output GenerationData.")
     elif isinstance(messages, list) and isinstance(messages[0], dict):  # convert list[dict] to list[Message] so all messages are validated
         messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
-
     assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
     messages: list[Message] = messages  # type: ignore
-    if apply_chat_template:
-        prompt = model.tokenizer.apply_chat_template(messages)
+    if apply_chat_template: prompt = model.tokenizer.apply_chat_template(messages)
+
+    if print_stream:
+        print()
+        for state, color in STATE_COLOR_MAP.items():
+            rprint(f"[{color}]■[/] [dim]{state.value}[/]")
+        print()
 
     with torch.inference_mode():
         tokens = torch.tensor([model.tokenizer.encode(prompt, bos=False, eos=False, allowed_special='all')], dtype=torch.long).to(device)
         bs, seqlen = tokens.shape
         cur_pos = 0
+        freqs_end = seqlen
 
         attn_mask = build_attn_mask(seqlen, cur_pos)
         freqs_cis = precompute_freqs_cis(model.params.head_dim, model.params.max_seq_len, model.params.rope_theta, model.params.use_scaled_rope)
         kvcache = KVCache.new(model.params.n_layers, bs, model.params.max_seq_len, model.params.n_local_kv_heads, model.params.head_dim).to(device)
 
         next_token = tokens
-        freqs_end = seqlen
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
-
         response = ""
         gen_tokens_text = []
+        gen_logits = []
         gen_metrics = []
+        gen_branches = []
         sampler_states = []
+
+        no_more = False
+        _break = False
 
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
-            # print("next_token", next_token)
-            # print("next_token shape", next_token.shape)
-            # print("next_token type", type(next_token))
             logits, kvcache, scores, attn_stats = xfmr(model.weights, model.params, next_token, cur_pos, freqs_cis[cur_pos:freqs_end], kvcache, attn_mask=attn)
             metrics = calculate_metrics(logits, scores)
-            next_token, sampler_state = sample(gen_tokens, logits, scores, metrics, sampler_cfg)
+            next_token, sampler_state = sample(
+                logits,
+                scores,
+                metrics,
+                sampler_cfg,
+                can_branch=((cur_pos >= seqlen) and not no_more),  # NOTE: disallow branching on the first token
+            )
 
-            gen_metrics.append(metrics)
-            sampler_states.append(sampler_state)
+            if sampler_state != SamplerState.BRANCHING:
+                gen_logits.append(logits)
+                gen_metrics.append(metrics)
+                sampler_states.append(sampler_state)
+                cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
+                freqs_end = cur_pos + 1
+                gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+                token_text = model.tokenizer.decode([next_token.item()])  # type: ignore (torch.int32 not recognized as int)
+                gen_tokens_text.append(token_text)
+                if torch.isin(next_token, stop_tokens).any(): break
+                response += token_text
+                if print_stream: rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
+                yield token_text, metrics, sampler_state, None
+            else:
+                # no_more = True
+                branches = []
+                for i, branch_token in enumerate(next_token[0]):
+                    branch_token = branch_token.unsqueeze(0)
+                    token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
+                    prefix = "├─" if i < len(next_token[0]) - 1 else "└─"
+                    if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace("\n", "\\n")}[/]", end='')
+                    branch_pos = cur_pos + 1
+                    branch_kvcache = copy.deepcopy(kvcache)
+                    branch_gen_logits = [logits]
+                    branch_gen_metrics = [metrics]
+                    branch_gen_tokens = [branch_token]
+                    branch_gen_tokens_text = [token_text]
+                    branch_sampler_states = [sampler_state]
+                    if not torch.isin(branch_token, stop_tokens).any(): 
+                        while branch_pos - cur_pos < sampler_cfg.branching.max_len:
+                            branch_logits, branch_kvcache, branch_scores, _ = xfmr(
+                                model.weights, model.params, branch_token, branch_pos, freqs_cis[branch_pos:branch_pos + 1], branch_kvcache, attn_mask=None
+                            )
+                            branch_gen_logits.append(branch_logits)
+                            branch_metrics = calculate_metrics(branch_logits, branch_scores)
+                            branch_gen_metrics.append(branch_metrics)
+                            branch_token, branch_sampler_state = sample(branch_logits, branch_scores, branch_metrics, sampler_cfg, can_branch=False)
+                            branch_gen_tokens.append(branch_token)
+                            branch_token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
+                            branch_gen_tokens_text.append(branch_token_text)
+                            branch_sampler_states.append(branch_sampler_state)
+                            branch_pos += 1
+                            if print_stream: rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace("\n", "\\n")}[/]", end='')
+                            if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
+                    branches.append(
+                        Branch(
+                            tokens=branch_gen_tokens,
+                            kvcache=branch_kvcache,
+                            cur_pos=branch_pos,
+                            tokens_text=branch_gen_tokens_text,
+                            metrics=branch_gen_metrics,
+                            sampler_states=branch_sampler_states,
+                        )
+                    )
 
-            cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-            freqs_end = cur_pos + 1
+                gen_branches.append([branch.to_dict() for branch in branches])
 
-            gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+                # TODO: other branch evaluation metrics
+                def score_branch(branch: Branch):
+                    # score = negative average entropy of the branch tokens
+                    entropies = [metrics.logit_entropy for metrics in branch.metrics]
+                    avg_entropy = sum(entropies) / len(entropies)
+                    return -avg_entropy
 
-            token_text = model.tokenizer.decode([next_token.item()])  # type: ignore
-            gen_tokens_text.append(token_text)
+                branch_scores = [score_branch(branch) for branch in branches]
+                best_branch_idx = branch_scores.index(max(branch_scores))
+                best_branch = branches[best_branch_idx]
 
-            # break after adding the stop token and its metrics to output but before adding to response text and yielding
-            if torch.isin(next_token, stop_tokens).any(): break
-            if print_stream:  #print(token_text, end='', flush=True)
-                rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='', flush=True)
+                for branch in branches:
+                    if branch != best_branch:
+                        del branch
 
-            yield token_text, metrics, sampler_state, None
+                next_token = best_branch.tokens[-1]
+                kvcache = best_branch.kvcache
+                cur_pos = best_branch.cur_pos
+                freqs_end = cur_pos + 1
+                gen_tokens = torch.cat([gen_tokens, torch.tensor(best_branch.tokens, device=device).unsqueeze(0)], dim=1)
+                gen_tokens_text.extend(best_branch.tokens_text)
+                gen_metrics.extend(best_branch.metrics)
+                sampler_states.extend(best_branch.sampler_states)
+                branch_response = "".join(best_branch.tokens_text)
+                response += branch_response
+                if branch_response[0] == " ": branch_response = branch_response[1:]
+                if print_stream: rprint(f"\n\n[#90EE90]{branch_response.replace("\n", "\\n")}[/]", end='')
+                if torch.isin(next_token, stop_tokens).any(): break
+
         if print_stream: print()
-
         messages.append(Message(role="assistant", content=response))
         gen = GenerationData(
             prompt=prompt,
@@ -729,3 +672,41 @@ def stream(
             sampler_states=sampler_states,
         )
         yield "", metrics, sampler_state, gen
+
+def stream(
+    messages: list[Message] | list[dict[str, str]] | str,
+    model: Model,
+    sampler_cfg: SamplerConfig | None = None,
+    max_tokens: int | None = None,
+    print_stream: bool = False,
+    apply_chat_template: bool = True,
+):
+    for token_text, metrics, sampler_state, gen in _generate(
+        messages=messages,
+        model=model,
+        sampler_cfg=sampler_cfg,
+        max_tokens=max_tokens,
+        print_stream=print_stream,
+        apply_chat_template=apply_chat_template,
+    ):
+        yield token_text, metrics, sampler_state, gen
+
+def generate(
+    messages: list[Message] | list[dict[str, str]] | str,
+    model: Model,
+    sampler_cfg: SamplerConfig | None = None,
+    max_tokens: int | None = None,
+    print_stream: bool = False,
+    apply_chat_template: bool = True,
+):
+    for token_text, metrics, sampler_state, gen in _generate(
+        messages=messages,
+        model=model,
+        sampler_cfg=sampler_cfg,
+        max_tokens=max_tokens,
+        print_stream=print_stream,
+        apply_chat_template=apply_chat_template,
+    ):
+        if gen is not None:
+            return gen
+    raise RuntimeError("Generation failed to complete")

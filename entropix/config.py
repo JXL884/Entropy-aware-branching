@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, Optional
+from pydantic import BaseModel, field_validator
 
 import torch
 
@@ -56,81 +57,82 @@ STATE_COLOR_MAP = {
     SamplerState.BRANCHING: '#ADD8E6',  # lightblue
 }
 
-@dataclass
-class SamplerConfig:
+class ThresholdLevel(BaseModel):
+    low: float
+    medium: float
+    high: float
+
+class Thresholds(BaseModel):
+    logit_entropy: ThresholdLevel = ThresholdLevel(low=0.6, medium=1.584, high=2.17)
+    logit_varentropy: ThresholdLevel = ThresholdLevel(low=1.584, medium=3.28, high=5.50)
+    attn_entropy: ThresholdLevel = ThresholdLevel(low=8.989, medium=8.99, high=8.991)
+    attn_varentropy: ThresholdLevel = ThresholdLevel(low=5.212, medium=5.9125, high=6.92)
+    agreement: ThresholdLevel = ThresholdLevel(low=2e-06, medium=4e-06, high=5e-06)
+    interaction_strength: ThresholdLevel = ThresholdLevel(low=0.2, medium=0.247, high=0.264)
+
+class AdaptiveCoefficients(BaseModel):
+    logit_entropy: float = 0.0
+    logit_varentropy: float = 0.0
+    attn_entropy: float = 0.0
+    attn_varentropy: float = 0.0
+    agreement: float = 0.0
+    interaction_strength: float = 0.0
+
+class Adaptive(BaseModel):
+    n_samples: int = 5
+    temperature: AdaptiveCoefficients = AdaptiveCoefficients(logit_entropy=0.3, attn_entropy=0.2, agreement=0.2)
+    top_p: AdaptiveCoefficients = AdaptiveCoefficients(attn_varentropy=0.1)
+    top_k: AdaptiveCoefficients = AdaptiveCoefficients(interaction_strength=0.3, agreement=0.2)
+    min_p: AdaptiveCoefficients = AdaptiveCoefficients(logit_varentropy=0.5)
+    score: AdaptiveCoefficients = AdaptiveCoefficients(
+        logit_entropy=0.1, attn_entropy=0.2, logit_varentropy=0.3, attn_varentropy=0.4, agreement=0.5, interaction_strength=0.6
+    )
+
+class Offsets(BaseModel):
+    high_entropy_attn: float = 1.3
+    low_entropy_interaction_strength: float = 1.2
+    high_entropy_varentropy_attn: float = 2.0
+
+class Coefficients(BaseModel):
+    high_entropy_attn: float = 0.2
+    low_entropy_interaction_strength: float = 0.3
+    high_entropy_varentropy_attn: float = 0.5
+
+class Branching(BaseModel):
+    num_samples: int = 5
+    max_len: int = 5
+
+# Main SamplerConfig Model
+class SamplerConfig(BaseModel):
     temperature: float = 0.666
     top_p: float = 0.90
-    top_k: float = 27
+    top_k: int = 27
     min_p: float = 0.03
-
-    class ThresholdLevel(NamedTuple):
-        low: float
-        medium: float
-        high: float
-
-    class Thresholds(NamedTuple):
-        logit_entropy: "SamplerConfig.ThresholdLevel"
-        logit_varentropy: "SamplerConfig.ThresholdLevel"
-        attn_entropy: "SamplerConfig.ThresholdLevel"
-        attn_varentropy: "SamplerConfig.ThresholdLevel"
-        agreement: "SamplerConfig.ThresholdLevel"
-        interaction_strength: "SamplerConfig.ThresholdLevel"
-
-    thresholds = Thresholds(
-        logit_entropy=ThresholdLevel(low=0.6, medium=1.584, high=2.17),
-        # logit_varentropy=ThresholdLevel(low=3.28, medium=3.85, high=6.18), # original
-        logit_varentropy=ThresholdLevel(low=1.584, medium=3.28, high=5.50), # lowered
-        attn_entropy=ThresholdLevel(low=8.989, medium=8.99, high=8.991),
-        attn_varentropy=ThresholdLevel(low=5.212, medium=5.9125, high=6.92),
-        agreement=ThresholdLevel(low=2e-06, medium=4e-06, high=5e-06),
-        interaction_strength=ThresholdLevel(low=0.2, medium=0.247, high=0.264),
-    )
-
-    class AdaptiveCoefficients(NamedTuple):
-        logit_entropy: float = 0.0
-        logit_varentropy: float = 0.0
-        attn_entropy: float = 0.0
-        attn_varentropy: float = 0.0
-        agreement: float = 0.0
-        interaction_strength: float = 0.0
-
-    class Adaptive(NamedTuple):
-        n_samples: int
-        temperature: "SamplerConfig.AdaptiveCoefficients"
-        top_p: "SamplerConfig.AdaptiveCoefficients"
-        top_k: "SamplerConfig.AdaptiveCoefficients"
-        min_p: "SamplerConfig.AdaptiveCoefficients"
-        score: "SamplerConfig.AdaptiveCoefficients"
-
-    adaptive = Adaptive(
-        n_samples=5,
-        temperature=AdaptiveCoefficients(logit_entropy=0.3, attn_entropy=0.2, agreement=0.2),
-        top_p=AdaptiveCoefficients(attn_varentropy=0.1),
-        top_k=AdaptiveCoefficients(interaction_strength=0.3, agreement=0.2),
-        min_p=AdaptiveCoefficients(logit_varentropy=0.5),
-        score=AdaptiveCoefficients(logit_entropy=0.1, attn_entropy=0.2, logit_varentropy=0.3, attn_varentropy=0.4, agreement=0.5, interaction_strength=0.6),
-    )
-
-    class Offsets(NamedTuple):
-        high_entropy_attn: float = 1.3
-        low_entropy_interaction_strength: float = 1.2
-        high_entropy_varentropy_attn: float = 2.0
-
-    class Coefficients(NamedTuple):
-        high_entropy_attn: float = 0.2
-        low_entropy_interaction_strength: float = 0.3
-        high_entropy_varentropy_attn: float = 0.5
-
-    offsets = Offsets()
-    coefficients = Coefficients()
-
-    class Branching(NamedTuple):
-        num_samples: int = 5
-
-    branching = Branching()
+    thresholds: Thresholds = Thresholds()
+    adaptive: Adaptive = Adaptive()
+    offsets: Offsets = Offsets()
+    coefficients: Coefficients = Coefficients()
+    branching: Branching = Branching()
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str) -> 'SamplerConfig':
         with open(path, "r") as f:
-            config = json.load(f)
-        return cls(**config)
+            config_dict = json.load(f)
+        return cls.model_validate(config_dict)
+
+    @classmethod
+    def from_dict(cls, config: dict):
+        return cls.model_validate(config)
+
+    def update(self, updates: dict) -> None:
+        for key, value in updates.items():
+            if hasattr(self, key):
+                current_attr = getattr(self, key)
+                if isinstance(current_attr, BaseModel) and isinstance(value, dict):
+                    current_attr = current_attr.model_copy(update=value)
+                    setattr(self, key, current_attr)
+                else:
+                    setattr(self, key, value)
+
+    def to_dict(self) -> dict:
+        return self.model_dump()
