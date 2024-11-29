@@ -72,7 +72,22 @@ app.layout = html.Div(
                         dbc.Col(
                             [
                                 dbc.Button("Show/Hide Messages", id="collapse-button", className="mb-3", color="primary"),
-                                dbc.Collapse([html.Div(id="messages-container")], id="collapse", is_open=False),
+                                dbc.Collapse(
+                                    [
+                                        dbc.ButtonGroup(
+                                            [
+                                                dbc.Button("Remove Response", id="remove-response", style={'display': 'none'}),
+                                                dbc.Button("Generate Response", id="generate-button", style={'display': 'none'}),
+                                                dbc.Button("Save Data", id="save-data-button", style={'display': 'none'}),
+                                            ],
+                                            id="button-group",
+                                            style={'display': 'none'}
+                                        ),
+                                        html.Div(id="messages-container"),
+                                    ],
+                                    id="collapse",
+                                    is_open=False
+                                ),
                             ],
                             width=12
                         ),
