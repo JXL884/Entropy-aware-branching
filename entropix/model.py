@@ -296,6 +296,17 @@ class Branch:
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_states": [s.name for s in self.sampler_states],
         }
+    
+def should_stop_branch(token_text, token_context, metrics):
+    BRANCH_STOP_TOKENS = {".", "\n", "!", "?", ";", ":", "{", "}", "\n\n", ".\n\n", ":\n\n"}
+
+    if token_text in BRANCH_STOP_TOKENS:
+        if token_text == ".":
+            # Special handling for ".", check if the previous token is a digit
+            if token_context and token_context[-1].isdigit():
+                return False  # It's part of a number
+        return True
+    return False
 
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
@@ -400,7 +411,7 @@ def _generate(
                     branch_gen_tokens_text = [token_text]
                     branch_sampler_states = [sampler_state]
                     if not torch.isin(branch_token, stop_tokens).any():
-                        while branch_pos - cur_pos < sampler_cfg.branching.max_len:
+                        while branch_pos < max_tokens:
                             branch_logits, branch_kvcache, branch_scores, _ = xfmr(
                                 model.weights, model.params, branch_token, branch_pos, freqs_cis[branch_pos:branch_pos + 1], branch_kvcache, attn_mask=None
                             )
@@ -415,6 +426,13 @@ def _generate(
                             branch_pos += 1
                             if print_stream: rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace("\n", "\\n")}[/]", end='')
                             if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
+
+                            token_context = branch_gen_tokens_text[:-1]
+                            stop = should_stop_branch(branch_token_text, token_context, branch_metrics)
+                            if stop:
+                                break
+                            if branch_pos >= max_tokens:
+                                break
                     branches.append(
                         Branch(
                             tokens=branch_gen_tokens,

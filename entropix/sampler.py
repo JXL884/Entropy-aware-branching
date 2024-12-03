@@ -243,7 +243,7 @@ def sample(
         sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
         return sampled_token, sampler_state
 
-    elif can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high):
+    elif can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high * 0.8 and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high * 0.8):
         sampler_state = SamplerState.BRANCHING
         sampled_tokens = branching_sample(logits, metrics, cfg, generator)
         return sampled_tokens, sampler_state
