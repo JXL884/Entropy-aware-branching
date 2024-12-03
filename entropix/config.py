@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 import torch
 
@@ -113,6 +113,43 @@ class SamplerConfig(BaseModel):
     offsets: Offsets = Offsets()
     coefficients: Coefficients = Coefficients()
     branching: Branching = Branching()
+
+    @model_validator(mode='before')
+    def validate_nested_models(cls, values):
+        if isinstance(values.get('thresholds'), dict):
+            current = Thresholds().model_dump()
+            cls._deep_update(current, values['thresholds'])
+            values['thresholds'] = Thresholds.model_validate(current)
+
+        if isinstance(values.get('adaptive'), dict):
+            current = Adaptive().model_dump()
+            cls._deep_update(current, values['adaptive'])
+            values['adaptive'] = Adaptive.model_validate(current)
+
+        if isinstance(values.get('offsets'), dict):
+            current = Offsets().model_dump()
+            cls._deep_update(current, values['offsets'])
+            values['offsets'] = Offsets.model_validate(current)
+
+        if isinstance(values.get('coefficients'), dict):
+            current = Coefficients().model_dump()
+            cls._deep_update(current, values['coefficients'])
+            values['coefficients'] = Coefficients.model_validate(current)
+
+        if isinstance(values.get('branching'), dict):
+            current = Branching().model_dump()
+            cls._deep_update(current, values['branching'])
+            values['branching'] = Branching.model_validate(current)
+
+        return values
+
+    @staticmethod
+    def _deep_update(current: dict, updates: dict):
+        for k, v in updates.items():
+            if isinstance(v, dict) and k in current and isinstance(current[k], dict):
+                SamplerConfig._deep_update(current[k], v)
+            else:
+                current[k] = v
 
     @classmethod
     def load(cls, path: str) -> 'SamplerConfig':

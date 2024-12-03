@@ -401,10 +401,11 @@ def _generate(
                 for i, branch_token in enumerate(next_token[0]):
                     branch_token = branch_token.unsqueeze(0)
                     token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                    prefix = "├─" if i < len(next_token[0]) - 1 else "└─"
+                    prefix = "├─" # if i < len(next_token[0]) - 1 else "└─"
                     if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace("\n", "\\n")}[/]", end='')
                     branch_pos = cur_pos + 1
-                    branch_kvcache = copy.deepcopy(kvcache)
+                    kvcache = kvcache.cpu()
+                    branch_kvcache = copy.deepcopy(kvcache).to(device)
                     branch_gen_logits = [logits]
                     branch_gen_metrics = [metrics]
                     branch_gen_tokens = [branch_token]
@@ -436,7 +437,7 @@ def _generate(
                     branches.append(
                         Branch(
                             tokens=branch_gen_tokens,
-                            kvcache=branch_kvcache,
+                            kvcache=branch_kvcache.cpu(),
                             cur_pos=branch_pos,
                             tokens_text=branch_gen_tokens_text,
                             metrics=branch_gen_metrics,
@@ -462,7 +463,7 @@ def _generate(
                         del branch
 
                 next_token = best_branch.tokens[-1]
-                kvcache = best_branch.kvcache
+                kvcache = best_branch.kvcache.to(device)
                 cur_pos = best_branch.cur_pos
                 freqs_end = cur_pos + 1
                 gen_tokens = torch.cat([gen_tokens, torch.tensor(best_branch.tokens, device=device).unsqueeze(0)], dim=1)
@@ -472,7 +473,7 @@ def _generate(
                 branch_response = "".join(best_branch.tokens_text)
                 response += branch_response
                 if print_stream:
-                    print("\n")
+                    rprint(f"\n[{STATE_COLOR_MAP[SamplerState.BRANCHING]}]╘═══[/]", end='')
                     for state, text in zip(best_branch.sampler_states, best_branch.tokens_text):
                         rprint(f"[{STATE_COLOR_MAP[state]}]{text.replace('\n', '\\n')}[/]", end='')
                 if torch.isin(next_token, stop_tokens).any(): break
