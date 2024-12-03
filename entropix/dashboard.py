@@ -37,9 +37,7 @@ app.layout = html.Div(
                 dbc.Modal(
                     [
                         dbc.ModalHeader("Save Data"),
-                        dbc.ModalBody([
-                            dbc.Input(id="filename-input", placeholder="Enter filename", type="text"),
-                        ]),
+                        dbc.ModalBody([dbc.Input(id="filename-input", placeholder="Enter filename", type="text")]),
                         dbc.ModalFooter(
                             [
                                 dbc.Button("Save", id="confirm-save", className="ms-auto", color="success"),
@@ -72,7 +70,21 @@ app.layout = html.Div(
                         dbc.Col(
                             [
                                 dbc.Button("Show/Hide Messages", id="collapse-button", className="mb-3", color="primary"),
-                                dbc.Collapse([html.Div(id="messages-container")], id="collapse", is_open=False),
+                                dbc.Collapse(
+                                    [
+                                        dbc.ButtonGroup(
+                                            [
+                                                dbc.Button("Generate Response", id="generate-button", style={'display': 'none'}),
+                                                dbc.Button("Save Data", id="save-data-button", style={'display': 'none'}),
+                                            ],
+                                            id="button-group",
+                                            style={'display': 'none'}
+                                        ),
+                                        html.Div(id="messages-container"),
+                                    ],
+                                    id="collapse",
+                                    is_open=False
+                                ),
                             ],
                             width=12
                         ),
@@ -96,8 +108,12 @@ app.layout = html.Div(
                             [
                                 html.Label("Max Tokens:"),
                                 dcc.Slider(
-                                    id='max-tokens-slider', min=50, max=300, step=10, value=100, marks={**{i: str(i)
-                                                                                                           for i in range(50, 301, 50)}, 300: 'all'}
+                                    id='max-tokens-slider',
+                                    min=50,
+                                    max=300,
+                                    step=10,
+                                    value=100,
+                                    marks={ **{i: str(i) for i in range(50, 301, 50)}, 300: 'all' },
                                 )
                             ]
                         )
@@ -208,17 +224,9 @@ def update_messages(data, current_messages):
         dbc.ButtonGroup(
             [
                 dbc.Button(
-                    "Remove Response",
-                    id="remove-response",
-                    color="danger",
-                    className="me-1",
-                    disabled=gen_data.messages and gen_data.messages[-1].role != "assistant",
-                ),
-                dbc.Button(
                     "Generate Response",
                     id="generate-button",
                     color="info",
-                    disabled=gen_data.messages and gen_data.messages[-1].role == "assistant",
                 ),
                 dbc.Button(
                     "Save Data",
@@ -289,33 +297,6 @@ def save_data(n_clicks, filename, stored_data):
         json.dump(gen_data.to_dict(), f, indent=2)
 
     return "Saved!"
-
-@callback(
-    [Output("messages-container", "children", allow_duplicate=True),
-     Output("stored-data", "data", allow_duplicate=True)],
-    Input("remove-response", "n_clicks"), [State("messages-container", "children"), State("stored-data", "data")],
-    prevent_initial_call=True
-)
-def remove_last_message(n_clicks, current_messages, stored_data):
-    if not n_clicks:
-        raise dash.exceptions.PreventUpdate
-
-    gen_data = load_data_from_contents(stored_data)
-
-    if not gen_data.messages or gen_data.messages[-1].role != "assistant":
-        raise dash.exceptions.PreventUpdate
-
-    # Remove last message
-    gen_data.messages.pop()
-    gen_data.tokens = []
-    gen_data.sampler_states = []
-
-    # Save modified data
-    json_str = json.dumps(gen_data.to_dict())
-    new_data = 'data:application/json;base64,' + base64.b64encode(json_str.encode()).decode()
-    messages = current_messages[:-1]
-
-    return messages, new_data
 
 def background_generate(messages, model, sampler_cfg, queue):
     response = ""

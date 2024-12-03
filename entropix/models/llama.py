@@ -1,28 +1,47 @@
 from entropix.model import ModelParams
 
-_llama_params = {
-    "dim": 2048,
-    "n_layers": 16,
-    "n_heads": 32,
-    "n_kv_heads": 8,
-    "vocab_size": 128256,
-    "ffn_dim_multiplier": 1.5,
-    "multiple_of": 256,
-    "norm_eps": 1e-05,
-    "rope_theta": 500000.0,
+_1b_params = {
+    "head_dim": 64,
+    "hidden_size": 2048,
+    "num_attention_heads": 32,
+    "num_hidden_layers": 16,
+    "num_key_value_heads": 8,
+    "max_seq_len": 8192,
     "use_scaled_rope": True,
-    "max_seq_len": 4096,
+    "rope_theta": 500000.0,
 }
-
 LLAMA_1B = ModelParams(
     name="llama-1b",
     hf_id="meta-llama/Llama-3.2-1B-Instruct",
-    dim=_llama_params["dim"],
-    n_layers=_llama_params["n_layers"],
-    n_local_heads=_llama_params["n_heads"],
-    n_local_kv_heads=_llama_params["n_kv_heads"],
-    head_dim=_llama_params["dim"] // _llama_params["n_heads"],
-    max_seq_len=_llama_params["max_seq_len"],
-    rope_theta=_llama_params["rope_theta"],
-    use_scaled_rope=_llama_params["use_scaled_rope"]
+    dim=_1b_params["hidden_size"],
+    n_layers=_1b_params["num_hidden_layers"],
+    n_local_heads=_1b_params["num_attention_heads"],
+    n_local_kv_heads=_1b_params["num_key_value_heads"],
+    head_dim=_1b_params["head_dim"],
+    max_seq_len=_1b_params["max_seq_len"],
+    rope_theta=_1b_params["rope_theta"],
+    use_scaled_rope=_1b_params["use_scaled_rope"]
+)
+
+_3b_params = {
+    "head_dim": 128,
+    "hidden_size": 3072,
+    "num_attention_heads": 24,
+    "num_hidden_layers": 28,
+    "num_key_value_heads": 8,
+    "max_seq_len": 8192,
+    "use_scaled_rope": True,
+    "rope_theta": 500000.0,
+}
+LLAMA_3B = ModelParams(
+    name="llama-3b",
+    hf_id="meta-llama/Llama-3.2-3B-Instruct",
+    dim=_3b_params["hidden_size"],
+    n_layers=_3b_params["num_hidden_layers"],
+    n_local_heads=_3b_params["num_attention_heads"],
+    n_local_kv_heads=_3b_params["num_key_value_heads"],
+    head_dim=_3b_params["head_dim"],
+    max_seq_len=_3b_params["max_seq_len"],
+    rope_theta=_3b_params["rope_theta"],
+    use_scaled_rope=_3b_params["use_scaled_rope"]
 )
