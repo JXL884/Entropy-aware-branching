@@ -246,13 +246,27 @@ def update_messages(data, current_messages):
         if msg.role == "assistant" and i == len(gen_data.messages) - 1:
             edit_button = dbc.Button("Edit", id={"type": "edit-button", "index": i}, size="sm", className="mb-2")
             tokens_html = []
-            for token, state in zip(gen_data.tokens, gen_data.sampler_states):
-                color = STATE_COLOR_MAP[state]
-                tokens_html.append(html.Span(token, style={'color': color}))
+
+            all_tokens = gen_data.tokens
+            all_states = gen_data.sampler_states
+
+            if not all_tokens:
+                tokens_html.append(html.Span(msg.content))
+            else:
+                for token, state in zip(all_tokens, all_states):
+                    color = STATE_COLOR_MAP[state]
+                    tokens_html.append(html.Span(token, style={'color': color}))
+
+            # for token, state in zip(gen_data.tokens, gen_data.sampler_states):
+            #     color = STATE_COLOR_MAP[state]
+            #     tokens_html.append(html.Span(token, style={'color': color}))
 
             display_div = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
             edit_textarea = dcc.Textarea(
-                value=msg.content, id={'type': 'message-text', 'role': msg.role, 'index': i}, style={'width': '100%', 'height': '100px'}, className="d-none"
+                value=msg.content,
+                id={'type': 'message-text', 'role': msg.role, 'index': i},
+                style={'width': '100%', 'height': '100px'},
+                className="d-none",
             )
             content = html.Div([edit_button, display_div, edit_textarea], style={'whiteSpace': 'pre-wrap'})
         else:
