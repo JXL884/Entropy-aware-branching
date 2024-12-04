@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import tyro
 from dash import (
     ALL,
+    MATCH,
     Input,
     Output,
     State,
@@ -113,7 +114,8 @@ app.layout = html.Div(
                                     max=300,
                                     step=10,
                                     value=100,
-                                    marks={ **{i: str(i) for i in range(50, 301, 50)}, 300: 'all' },
+                                    marks={**{i: str(i)
+                                              for i in range(50, 301, 50)}, 300: 'all'},
                                 )
                             ]
                         )
@@ -242,11 +244,17 @@ def update_messages(data, current_messages):
     for i, msg in enumerate(gen_data.messages):
         # For the final assistant message, show colored tokens
         if msg.role == "assistant" and i == len(gen_data.messages) - 1:
+            edit_button = dbc.Button("Edit", id={"type": "edit-button", "index": i}, size="sm", className="mb-2")
             tokens_html = []
             for token, state in zip(gen_data.tokens, gen_data.sampler_states):
                 color = STATE_COLOR_MAP[state]
                 tokens_html.append(html.Span(token, style={'color': color}))
-            content = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
+
+            display_div = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
+            edit_textarea = dcc.Textarea(
+                value=msg.content, id={'type': 'message-text', 'role': msg.role, 'index': i}, style={'width': '100%', 'height': '100px'}, className="d-none"
+            )
+            content = html.Div([edit_button, display_div, edit_textarea], style={'whiteSpace': 'pre-wrap'})
         else:
             content = dcc.Textarea(
                 value=msg.content,
@@ -258,6 +266,17 @@ def update_messages(data, current_messages):
         message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
 
     return message_boxes
+
+@callback(
+    [Output({"type": "message-text", "role": "assistant", "index": MATCH}, "className"),
+     Output({"type": "edit-button", "index": MATCH}, "children")],
+    Input({"type": "edit-button", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True
+)
+def toggle_edit_mode(n_clicks):
+    if n_clicks and n_clicks % 2 == 1:
+        return "", "Done"
+    return "d-none", "Edit"
 
 @callback(
     Output("save-modal", "is_open"),
@@ -324,7 +343,8 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
 
     messages = [{"role": id_dict["role"], "content": content} for content, id_dict in zip(message_contents, message_ids)]
     messages = [Message(**m) for m in messages]
-    messages.append(Message(role="assistant", content=""))
+    if not any(m.role == "assistant" for m in messages):
+        messages.append(Message(role="assistant", content=""))
 
     sampler_cfg = SamplerConfig()
     model_params = LLAMA_1B
