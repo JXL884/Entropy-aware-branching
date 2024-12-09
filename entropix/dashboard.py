@@ -365,7 +365,14 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
 
     # Initialize generation data with all required fields
     gen_data = GenerationData(
-        prompt=tokenizer.apply_chat_template(messages), response="", tokens=[], messages=messages, metrics=[], sampler_cfg=sampler_cfg, sampler_states=[]
+        prompt=tokenizer.apply_chat_template(messages),
+        response="",
+        tokens=[],
+        messages=messages,
+        branches=[],
+        metrics=[],
+        sampler_cfg=sampler_cfg,
+        sampler_states=[],
     )
 
     json_str = json.dumps(gen_data.to_dict())
