@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import tyro
 from dash import (
     ALL,
+    MATCH,
     Input,
     Output,
     State,
@@ -113,7 +114,8 @@ app.layout = html.Div(
                                     max=300,
                                     step=10,
                                     value=100,
-                                    marks={ **{i: str(i) for i in range(50, 301, 50)}, 300: 'all' },
+                                    marks={**{i: str(i)
+                                              for i in range(50, 301, 50)}, 300: 'all'},
                                 )
                             ]
                         )
@@ -205,59 +207,15 @@ def toggle_collapse(n_clicks, is_open):
     return is_open
 
 @callback(
-    Output("messages-container", "children"),
-    [Input("stored-data", "data")],
-    [State("messages-container", "children")],
+    [Output({"type": "message-text", "role": "assistant", "index": MATCH}, "className"),
+     Output({"type": "edit-button", "index": MATCH}, "children")],
+    Input({"type": "edit-button", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True
 )
-def update_messages(data, current_messages):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise dash.exceptions.PreventUpdate
-
-    if not data and not current_messages:
-        return []
-
-    gen_data = load_data_from_contents(data)
-    message_boxes = []
-
-    message_boxes.append(
-        dbc.ButtonGroup(
-            [
-                dbc.Button(
-                    "Generate Response",
-                    id="generate-button",
-                    color="info",
-                ),
-                dbc.Button(
-                    "Save Data",
-                    id="save-data-button",
-                    color="success",
-                    className="ms-1",
-                ),
-            ],
-            className="mb-3",
-        )
-    )
-
-    for i, msg in enumerate(gen_data.messages):
-        # For the final assistant message, show colored tokens
-        if msg.role == "assistant" and i == len(gen_data.messages) - 1:
-            tokens_html = []
-            for token, state in zip(gen_data.tokens, gen_data.sampler_states):
-                color = STATE_COLOR_MAP[state]
-                tokens_html.append(html.Span(token, style={'color': color}))
-            content = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
-        else:
-            content = dcc.Textarea(
-                value=msg.content,
-                id={'type': 'message-text', 'role': msg.role, 'index': len(message_boxes) - 1},
-                style={'width': '100%', 'height': '100px'},
-                readOnly='assistant' in msg.role
-            )
-
-        message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
-
-    return message_boxes
+def toggle_edit_mode(n_clicks):
+    if n_clicks and n_clicks % 2 == 1:
+        return "", "Done"
+    return "d-none", "Edit"
 
 @callback(
     Output("save-modal", "is_open"),
@@ -298,6 +256,68 @@ def save_data(n_clicks, filename, stored_data):
 
     return "Saved!"
 
+@callback(
+    Output("messages-container", "children"),
+    [Input("stored-data", "data")],
+    [State("messages-container", "children")],
+)
+def update_messages(data, current_messages):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+
+    if not data and not current_messages:
+        return []
+
+    gen_data = load_data_from_contents(data)
+    message_boxes = []
+
+    message_boxes.append(
+        dbc.ButtonGroup(
+            [
+                dbc.Button(
+                    "Generate Response",
+                    id="generate-button",
+                    color="info",
+                ),
+                dbc.Button(
+                    "Save Data",
+                    id="save-data-button",
+                    color="success",
+                    className="ms-1",
+                ),
+            ],
+            className="mb-3",
+        )
+    )
+
+    for i, msg in enumerate(gen_data.messages[:-1]):
+        content = dcc.Textarea(
+            value=msg.content,
+            id={'type': 'message-text', 'role': msg.role, 'index': i},  # len(message_boxes) - 1},
+            style={'width': '100%', 'height': '100px'},
+            readOnly=False,
+        )
+        message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
+
+    msg = gen_data.messages[-1]
+    edit_button = dbc.Button("Edit", id={"type": "edit-button", "index": len(message_boxes)}, size="sm", className="mb-2")
+    tokens_html = []
+    for token, state in zip(gen_data.tokens, gen_data.sampler_states):
+        color = STATE_COLOR_MAP[state]
+        tokens_html.append(html.Span(token, style={'color': color}))
+    display_div = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
+    edit_textarea = dcc.Textarea(
+        value=msg.content,
+        id={'type': 'message-text', 'role': msg.role, 'index': len(message_boxes)},
+        style={'width': '100%', 'height': '100px'},
+        className="d-none",
+    )
+    content = html.Div([edit_button, display_div, edit_textarea], style={'whiteSpace': 'pre-wrap'})
+    message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
+
+    return message_boxes
+
 def background_generate(messages, model, sampler_cfg, queue):
     response = ""
     for token, metrics, state, generation_data in stream(messages, model, sampler_cfg):
@@ -322,9 +342,17 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
     if not n_clicks:
         return dash.no_update
 
+    print("starting generation")
+
     messages = [{"role": id_dict["role"], "content": content} for content, id_dict in zip(message_contents, message_ids)]
     messages = [Message(**m) for m in messages]
     messages.append(Message(role="assistant", content=""))
+
+    print("\nMESSAGES\n")
+    for m in messages:
+        print(m.role)
+        print(m.content)
+        print()
 
     sampler_cfg = SamplerConfig()
     model_params = LLAMA_1B
@@ -356,13 +384,15 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
         Output("generation-interval", "disabled", allow_duplicate=True),
         Output("generation-complete-trigger", "data", allow_duplicate=True),
     ],
-    Input("generation-interval", "n_intervals"), [State("generation-state", "data"), State("stored-data", "data")],
-    prevent_initial_call=True
+    Input("generation-interval", "n_intervals"),
+    [State("generation-state", "data"), State("stored-data", "data")],
+    prevent_initial_call=True,
 )
 def update_generation(n_intervals, state, stored_data):
     if not state['generating']:
         return dash.no_update
 
+    print("update_generation")
     gen_data = load_data_from_contents(stored_data)
     new_data = "data:application/json;base64,"
 
@@ -370,6 +400,7 @@ def update_generation(n_intervals, state, stored_data):
         result = app.queue.get_nowait()  # type: ignore
 
         if result is None:  # Generation complete
+            print("generation complete, using stored data")
             return stored_data, {'generating': False}, True, datetime.now().isoformat()
 
         token, metrics, sampler_state, response, complete_gen_data = result
@@ -385,8 +416,15 @@ def update_generation(n_intervals, state, stored_data):
         json_str = json.dumps(gen_data.to_dict())
         new_data = 'data:application/json;base64,' + base64.b64encode(json_str.encode()).decode()
 
+        print("\nMESSAGES\n")
+        for m in gen_data.messages:
+            print(m.role)
+            print(m.content)
+            print()
+
         return new_data, state, False, dash.no_update
     except queue.Empty:
+        print("queue empty")
         return dash.no_update
 
 def load_data_from_contents(contents):
