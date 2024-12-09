@@ -239,9 +239,10 @@ def toggle_save_modal(save_clicks, confirm_clicks, cancel_clicks, is_open):
     raise dash.exceptions.PreventUpdate
 
 @callback(
-    Output("save-data-button", "children"), [Input("confirm-save", "n_clicks")],
+    Output("save-data-button", "children"),
+    [Input("confirm-save", "n_clicks")],
     [State("filename-input", "value"), State("stored-data", "data")],
-    prevent_initial_call=True
+    prevent_initial_call=True,
 )
 def save_data(n_clicks, filename, stored_data):
     if not n_clicks or not stored_data or not filename:
@@ -294,7 +295,7 @@ def update_messages(data, current_messages):
     for i, msg in enumerate(gen_data.messages[:-1]):
         content = dcc.Textarea(
             value=msg.content,
-            id={'type': 'message-text', 'role': msg.role, 'index': i},  # len(message_boxes) - 1},
+            id={'type': 'message-text', 'role': msg.role, 'index': i},
             style={'width': '100%', 'height': '100px'},
             readOnly=False,
         )
