@@ -6,14 +6,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Generator, NamedTuple, Optional, Tuple
 import copy
-
+import re
 import jax.numpy as jnp
 import numpy as np
 from scipy.special import kv
 import torch
 import torch.nn.functional as F
 from rich import print as rprint
-
+from openai import OpenAI
 from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState, STATE_COLOR_MAP
 from entropix.kvcache import KVCache
 from entropix.sampler import sample
@@ -308,6 +308,17 @@ def should_stop_branch(token_text, token_context, metrics):
         return True
     return False
 
+def feedback(messages: list[Message]):
+    MY_API_KEYS = "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"
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=MY_API_KEYS)
+
+    completion = client.chat.completions.create(
+            # https://openrouter.ai/models
+            model="meta-llama/llama-3.1-8b-instruct",
+            messages=messages)
+    eval = completion.choices[0].message.content
+    return eval
+
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
@@ -315,6 +326,8 @@ def _generate(
     max_tokens: int | None = None,
     print_stream: bool = False,
     apply_chat_template: bool = True,
+    firstgenbranch: bool = True,
+    self_feedback: bool = False,
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Core function to generate text using the transformer model and stream the response out.
@@ -381,6 +394,7 @@ def _generate(
                 metrics,
                 sampler_cfg,
                 can_branch=cur_pos >= seqlen,  # NOTE: disallow branching on the first token
+                firstgenbranch=firstgenbranch,
             )
 
             if sampler_state != SamplerState.BRANCHING:
@@ -447,16 +461,85 @@ def _generate(
 
                 gen_branches.append([branch.to_dict() for branch in branches])
 
-                # TODO: other branch evaluation metrics
-                def score_branch(branch: Branch):
-                    # score = negative average entropy of the branch tokens
-                    entropies = [metrics.logit_entropy for metrics in branch.metrics]
-                    avg_entropy = sum(entropies) / len(entropies)
-                    return -avg_entropy
+                # # TODO: other branch evaluation metrics
+                # def score_branch(branch: Branch):
+                #     # score = negative average entropy of the branch tokens
+                #     entropies = [metrics.logit_entropy for metrics in branch.metrics]
+                #     avg_entropy = sum(entropies) / len(entropies)
+                #     return -avg_entropy
 
-                branch_scores = [score_branch(branch) for branch in branches]
-                best_branch_idx = branch_scores.index(max(branch_scores))
-                best_branch = branches[best_branch_idx]
+                # branch_scores = [score_branch(branch) for branch in branches]
+                # best_branch_idx = branch_scores.index(max(branch_scores))
+                # best_branch = branches[best_branch_idx]
+
+                # Instead of scoring branches by entropy, ask the model itself:
+                # Prepare a prompt that lists all candidate completions
+                # Before building `analysis_prompt`
+                previous_context = "".join(gen_tokens_text)  # or use `response` if you want the full assistant response so far
+
+                analysis_prompt_sys = (
+                    "You are an expert evaluator assessing reasoning chains. "
+                    "Here're several generated candidate completions below. "
+                    "Please choose the most correct and relevant one:\n\n"
+                )
+                analysis_prompt = ""
+                # Optionally, also include original messages for even more context
+                for m in messages:
+                    analysis_prompt += f"{m.role.upper()}: {m.content}\n"
+                analysis_prompt += "\n"
+
+                # Add previously generated tokens for context
+                analysis_prompt += "Previously generated tokens:\n" + previous_context + "\n\n"
+
+                # Now list out the candidate branches
+                for i, b in enumerate(branches):
+                    completion_text = "".join(b.tokens_text)
+                    analysis_prompt += f"Option {i}:\n{completion_text}\n\n"
+
+                analysis_prompt += "Which Option number is the best one? Please think step by step shortly then put your final answer in {}. Like {Option X}"
+
+                # Generate the model's response to the analysis prompt
+                analysis_messages = [Message(role="system", content=analysis_prompt_sys),
+                                    Message(role="user", content=analysis_prompt)]
+                if self_feedback:
+                    decision_gen = list(_generate(
+                        messages=analysis_messages,
+                        model=model,
+                        sampler_cfg=sampler_cfg,
+                        max_tokens=500,
+                        print_stream=True,  # Probably don't need to print the decision
+                        apply_chat_template=True,
+                        firstgenbranch=False,  # Don't allow branching on the decision
+                    ))
+
+                    # Parse the model’s final response to find the chosen candidate index
+                    # Let's assume the model just returns a number like "0", "1", etc.
+                    # decision_gen[-1] should contain the final GenerationData in the 4th element of the tuple
+                    # The output of _generate is tuples: (token_text, metrics, sampler_state, GenerationData or None)
+                    # The final yield with GenerationData is the last element
+                    feedbacks = decision_gen[-1][3]
+                    decision_response = feedbacks.response.strip()
+                else:
+                    feedbacks = feedback(analysis_messages)
+                    print(feedbacks)
+                    decision_response = feedbacks.strip()
+
+                # Extract the content inside the {}
+                match = re.search(r'\{(.*?)\}', decision_response)  # Look for text inside {}
+                if match:
+                    answer_content = match.group(1).strip()  # Get the text inside {}
+                    # Try to extract a number from the content
+                    number_match = re.search(r'\b(\d+)\b', answer_content)
+                    if number_match:
+                        chosen_index = int(number_match.group(1))  # Extract the number
+                    else:
+                        print("Failed to find a number inside the {}. Defaulting to candidate 0.")
+                        chosen_index = 0
+                else:
+                    print("Failed to find {} in the response. Defaulting to candidate 0.")
+                    chosen_index = 0
+
+                best_branch = branches[chosen_index]
 
                 for branch in branches:
                     if branch != best_branch:
