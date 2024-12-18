@@ -239,12 +239,12 @@ def sample(
     firstgenbranch: bool = True,
 ) -> Tuple[torch.Tensor, SamplerState]:
     # Low Entropy, Low Varentropy
-    if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
-        sampler_state = SamplerState.ARGMAX
-        sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-        return sampled_token, sampler_state
+    # if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
+    #     sampler_state = SamplerState.ARGMAX
+    #     sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
+    #     return sampled_token, sampler_state
 
-    elif can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high) and firstgenbranch:
+    if can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high) and firstgenbranch:
         sampler_state = SamplerState.BRANCHING
         sampled_tokens = branching_sample(logits, metrics, cfg, generator)
         return sampled_tokens, sampler_state
@@ -275,9 +275,13 @@ def sample(
     #         )
     #         return sampled_token, sampler_state
 
-    else:  # All other cases: use adaptive sampling
-        # TODO: break this out to its own function, revist how we are doing "adaptive sampling" **OR** just use a simpler sampler method
-        sampler_state = SamplerState.ADAPTIVE
-        # sampled_token = adaptive_sample(logits, metrics, cfg, epsilon=0.1, generator=generator)
-        sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+    else:
+        sampler_state = SamplerState.ARGMAX
+        sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
         return sampled_token, sampler_state
+    # else:  # All other cases: use adaptive sampling
+    #     # TODO: break this out to its own function, revist how we are doing "adaptive sampling" **OR** just use a simpler sampler method
+    #     sampler_state = SamplerState.ADAPTIVE
+    #     # sampled_token = adaptive_sample(logits, metrics, cfg, epsilon=0.1, generator=generator)
+    #     sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+    #     return sampled_token, sampler_state

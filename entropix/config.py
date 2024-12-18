@@ -63,8 +63,10 @@ class ThresholdLevel(BaseModel):
     high: float
 
 class Thresholds(BaseModel):
-    logit_entropy: ThresholdLevel = ThresholdLevel(low=0.6, medium=1.584, high=2.17)
-    logit_varentropy: ThresholdLevel = ThresholdLevel(low=1.584, medium=3.28, high=5.50)
+    # logit_entropy: ThresholdLevel = ThresholdLevel(low=0.6, medium=1.584, high=2.17)
+    # logit_varentropy: ThresholdLevel = ThresholdLevel(low=1.584, medium=3.28, high=5.50)
+    logit_entropy: ThresholdLevel = ThresholdLevel(low=1.08 * 1.2, medium=2.85 * 1.2, high=3.91 * 1.2)
+    logit_varentropy: ThresholdLevel = ThresholdLevel(low=2.85 * 1.2, medium=5.90 * 1.2, high=9.5 * 1.2)
     attn_entropy: ThresholdLevel = ThresholdLevel(low=8.989, medium=8.99, high=8.991)
     attn_varentropy: ThresholdLevel = ThresholdLevel(low=5.212, medium=5.9125, high=6.92)
     agreement: ThresholdLevel = ThresholdLevel(low=2e-06, medium=4e-06, high=5e-06)
