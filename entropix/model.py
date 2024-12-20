@@ -69,6 +69,7 @@ class GenerationData:
     response: str
     tokens: list[str]
     messages: list[Message]
+    branches: list[list[dict]]
     metrics: list[TokenMetrics]
     sampler_cfg: SamplerConfig
     sampler_states: list[SamplerState]
@@ -80,7 +81,6 @@ class GenerationData:
             "tokens": self.tokens,
             "messages": [m.model_dump() for m in self.messages],
             "metrics": [asdict(m) for m in self.metrics],
-            # "sampler_cfg": asdict(self.sampler_cfg),
             "sampler_cfg": self.sampler_cfg.model_dump(),
             "sampler_states": [s.name for s in self.sampler_states],
         }
@@ -94,6 +94,11 @@ class GenerationData:
     def load(cls, fp: str):
         with open(fp, 'rb') as f:
             data = json.load(f)
+        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": ""}
+        for k, default in defaults.items():
+            if k not in data:
+                logging.warning(f"Missing field '{k}' in loaded data, using default: {default}")
+                data[k] = default
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
         data["messages"] = [Message(**m) for m in data["messages"]]
         data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
@@ -102,9 +107,13 @@ class GenerationData:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
+        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": ""}
+        for k, default in defaults.items():
+            if k not in data:
+                logging.warning(f"Missing field '{k}' in loaded data, using default: {default}")
+                data[k] = default
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
         data["messages"] = [Message(**m) for m in data["messages"]]
-        # data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
         data["sampler_cfg"] = SamplerConfig.from_dict(data["sampler_cfg"])
         data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)
@@ -296,7 +305,7 @@ class Branch:
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_states": [s.name for s in self.sampler_states],
         }
-    
+
 def should_stop_branch(token_text, token_context, metrics):
     BRANCH_STOP_TOKENS = {".", "\n", ".\n", "!", "?", ";", ":", "{", "}", "\n\n", ".\n\n", ":\n\n"}
 
@@ -415,8 +424,8 @@ def _generate(
                 for i, branch_token in enumerate(next_token[0]):
                     branch_token = branch_token.unsqueeze(0)
                     token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                    prefix = "├─" # if i < len(next_token[0]) - 1 else "└─"
-                    if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace("\n", "\\n")}[/]", end='')
+                    prefix = "├─"  if i < len(next_token[0]) - 1 else "└─"
+                    if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace('\n', '\\n')}[/]", end='')
                     branch_pos = cur_pos + 1
                     kvcache = kvcache.cpu()
                     branch_kvcache = copy.deepcopy(kvcache).to(device)
@@ -439,7 +448,8 @@ def _generate(
                             branch_gen_tokens_text.append(branch_token_text)
                             branch_sampler_states.append(branch_sampler_state)
                             branch_pos += 1
-                            if print_stream: rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace("\n", "\\n")}[/]", end='')
+                            if print_stream:
+                                rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace('\n', '\\n')}[/]", end='')
                             if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
 
                             token_context = branch_gen_tokens_text[:-1]
@@ -544,7 +554,7 @@ def _generate(
                 branch_response = "".join(best_branch.tokens_text)
                 response += branch_response
                 if print_stream:
-                    rprint(f"\n[{STATE_COLOR_MAP[SamplerState.BRANCHING]}]╘═══[/]", end='')
+                    rprint(f"\n[{STATE_COLOR_MAP[SamplerState.BRANCHING]}]=>[/]", end='')
                     for state, text in zip(best_branch.sampler_states, best_branch.tokens_text):
                         rprint(f"[{STATE_COLOR_MAP[state]}]{text.replace('\n', '\\n')}[/]", end='')
                 if torch.isin(next_token, stop_tokens).any(): break
@@ -556,6 +566,7 @@ def _generate(
             response=response,
             tokens=gen_tokens_text,
             messages=messages,
+            branches=gen_branches,
             metrics=gen_metrics,
             sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,

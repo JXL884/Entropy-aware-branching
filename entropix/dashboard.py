@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import tyro
 from dash import (
     ALL,
+    MATCH,
     Input,
     Output,
     State,
@@ -113,7 +114,8 @@ app.layout = html.Div(
                                     max=300,
                                     step=10,
                                     value=100,
-                                    marks={ **{i: str(i) for i in range(50, 301, 50)}, 300: 'all' },
+                                    marks={**{i: str(i)
+                                              for i in range(50, 301, 50)}, 300: 'all'},
                                 )
                             ]
                         )
@@ -205,6 +207,57 @@ def toggle_collapse(n_clicks, is_open):
     return is_open
 
 @callback(
+    [Output({"type": "message-text", "role": "assistant", "index": MATCH}, "className"),
+     Output({"type": "edit-button", "index": MATCH}, "children")],
+    Input({"type": "edit-button", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True
+)
+def toggle_edit_mode(n_clicks):
+    if n_clicks and n_clicks % 2 == 1:
+        return "", "Done"
+    return "d-none", "Edit"
+
+@callback(
+    Output("save-modal", "is_open"),
+    [Input("save-data-button", "n_clicks"), Input("confirm-save", "n_clicks"),
+     Input("cancel-save", "n_clicks")], [State("save-modal", "is_open")],
+    prevent_initial_call=True
+)
+def toggle_save_modal(save_clicks, confirm_clicks, cancel_clicks, is_open):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    # Only respond to actual button clicks
+    if trigger_id == "save-data-button" and ctx.triggered[0]["value"]:
+        return True
+    elif trigger_id in ["confirm-save", "cancel-save"] and ctx.triggered[0]["value"]:
+        return False
+
+    raise dash.exceptions.PreventUpdate
+
+@callback(
+    Output("save-data-button", "children"),
+    [Input("confirm-save", "n_clicks")],
+    [State("filename-input", "value"), State("stored-data", "data")],
+    prevent_initial_call=True,
+)
+def save_data(n_clicks, filename, stored_data):
+    if not n_clicks or not stored_data or not filename:
+        raise dash.exceptions.PreventUpdate
+
+    if not filename.endswith('.json'):
+        filename += '.json'
+
+    gen_data = load_data_from_contents(stored_data)
+    with open(filename, 'w') as f:
+        json.dump(gen_data.to_dict(), f, indent=2)
+
+    return "Saved!"
+
+@callback(
     Output("messages-container", "children"),
     [Input("stored-data", "data")],
     [State("messages-container", "children")],
@@ -239,64 +292,32 @@ def update_messages(data, current_messages):
         )
     )
 
-    for i, msg in enumerate(gen_data.messages):
-        # For the final assistant message, show colored tokens
-        if msg.role == "assistant" and i == len(gen_data.messages) - 1:
-            tokens_html = []
-            for token, state in zip(gen_data.tokens, gen_data.sampler_states):
-                color = STATE_COLOR_MAP[state]
-                tokens_html.append(html.Span(token, style={'color': color}))
-            content = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
-        else:
-            content = dcc.Textarea(
-                value=msg.content,
-                id={'type': 'message-text', 'role': msg.role, 'index': len(message_boxes) - 1},
-                style={'width': '100%', 'height': '100px'},
-                readOnly='assistant' in msg.role
-            )
-
+    for i, msg in enumerate(gen_data.messages[:-1]):
+        content = dcc.Textarea(
+            value=msg.content,
+            id={'type': 'message-text', 'role': msg.role, 'index': i},
+            style={'width': '100%', 'height': '100px'},
+            readOnly=False,
+        )
         message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
 
+    msg = gen_data.messages[-1]
+    edit_button = dbc.Button("Edit", id={"type": "edit-button", "index": len(message_boxes)}, size="sm", className="mb-2")
+    tokens_html = []
+    for token, state in zip(gen_data.tokens, gen_data.sampler_states):
+        color = STATE_COLOR_MAP[state]
+        tokens_html.append(html.Span(token, style={'color': color}))
+    display_div = html.Div(tokens_html, style={'whiteSpace': 'pre-wrap'})
+    edit_textarea = dcc.Textarea(
+        value=msg.content,
+        id={'type': 'message-text', 'role': msg.role, 'index': len(message_boxes)},
+        style={'width': '100%', 'height': '100px'},
+        className="d-none",
+    )
+    content = html.Div([edit_button, display_div, edit_textarea], style={'whiteSpace': 'pre-wrap'})
+    message_boxes.append(dbc.Card([dbc.CardHeader(msg.role), dbc.CardBody(content)], className="mb-3"))
+
     return message_boxes
-
-@callback(
-    Output("save-modal", "is_open"),
-    [Input("save-data-button", "n_clicks"), Input("confirm-save", "n_clicks"),
-     Input("cancel-save", "n_clicks")], [State("save-modal", "is_open")],
-    prevent_initial_call=True
-)
-def toggle_save_modal(save_clicks, confirm_clicks, cancel_clicks, is_open):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise dash.exceptions.PreventUpdate
-
-    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-
-    # Only respond to actual button clicks
-    if trigger_id == "save-data-button" and ctx.triggered[0]["value"]:
-        return True
-    elif trigger_id in ["confirm-save", "cancel-save"] and ctx.triggered[0]["value"]:
-        return False
-
-    raise dash.exceptions.PreventUpdate
-
-@callback(
-    Output("save-data-button", "children"), [Input("confirm-save", "n_clicks")],
-    [State("filename-input", "value"), State("stored-data", "data")],
-    prevent_initial_call=True
-)
-def save_data(n_clicks, filename, stored_data):
-    if not n_clicks or not stored_data or not filename:
-        raise dash.exceptions.PreventUpdate
-
-    if not filename.endswith('.json'):
-        filename += '.json'
-
-    gen_data = load_data_from_contents(stored_data)
-    with open(filename, 'w') as f:
-        json.dump(gen_data.to_dict(), f, indent=2)
-
-    return "Saved!"
 
 def background_generate(messages, model, sampler_cfg, queue):
     response = ""
@@ -322,9 +343,17 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
     if not n_clicks:
         return dash.no_update
 
+    print("starting generation")
+
     messages = [{"role": id_dict["role"], "content": content} for content, id_dict in zip(message_contents, message_ids)]
     messages = [Message(**m) for m in messages]
     messages.append(Message(role="assistant", content=""))
+
+    print("\nMESSAGES\n")
+    for m in messages:
+        print(m.role)
+        print(m.content)
+        print()
 
     sampler_cfg = SamplerConfig()
     model_params = LLAMA_1B
@@ -336,7 +365,14 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
 
     # Initialize generation data with all required fields
     gen_data = GenerationData(
-        prompt=tokenizer.apply_chat_template(messages), response="", tokens=[], messages=messages, metrics=[], sampler_cfg=sampler_cfg, sampler_states=[]
+        prompt=tokenizer.apply_chat_template(messages),
+        response="",
+        tokens=[],
+        messages=messages,
+        branches=[],
+        metrics=[],
+        sampler_cfg=sampler_cfg,
+        sampler_states=[],
     )
 
     json_str = json.dumps(gen_data.to_dict())
@@ -356,13 +392,15 @@ def start_generation(n_clicks, message_contents, message_ids, stored_data):
         Output("generation-interval", "disabled", allow_duplicate=True),
         Output("generation-complete-trigger", "data", allow_duplicate=True),
     ],
-    Input("generation-interval", "n_intervals"), [State("generation-state", "data"), State("stored-data", "data")],
-    prevent_initial_call=True
+    Input("generation-interval", "n_intervals"),
+    [State("generation-state", "data"), State("stored-data", "data")],
+    prevent_initial_call=True,
 )
 def update_generation(n_intervals, state, stored_data):
     if not state['generating']:
         return dash.no_update
 
+    print("update_generation")
     gen_data = load_data_from_contents(stored_data)
     new_data = "data:application/json;base64,"
 
@@ -370,6 +408,7 @@ def update_generation(n_intervals, state, stored_data):
         result = app.queue.get_nowait()  # type: ignore
 
         if result is None:  # Generation complete
+            print("generation complete, using stored data")
             return stored_data, {'generating': False}, True, datetime.now().isoformat()
 
         token, metrics, sampler_state, response, complete_gen_data = result
@@ -385,8 +424,15 @@ def update_generation(n_intervals, state, stored_data):
         json_str = json.dumps(gen_data.to_dict())
         new_data = 'data:application/json;base64,' + base64.b64encode(json_str.encode()).decode()
 
+        print("\nMESSAGES\n")
+        for m in gen_data.messages:
+            print(m.role)
+            print(m.content)
+            print()
+
         return new_data, state, False, dash.no_update
     except queue.Empty:
+        print("queue empty")
         return dash.no_update
 
 def load_data_from_contents(contents):
