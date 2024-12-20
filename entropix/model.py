@@ -317,16 +317,82 @@ def should_stop_branch(token_text, token_context, metrics):
         return True
     return False
 
-def feedback(messages: list[Message]):
-    MY_API_KEYS = ""
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=MY_API_KEYS)
-
+def send_api_message(messages: list[Message]):
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    assert api_key is not None, "OPENROUTER_API_KEY environment variable not set"
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
     completion = client.chat.completions.create(
-            # https://openrouter.ai/models
-            model="meta-llama/llama-3.3-70b-instruct",
-            messages=messages)
+        # https://openrouter.ai/models
+        model="meta-llama/llama-3.3-70b-instruct",
+        messages=messages  # type: ignore
+    )
     eval = completion.choices[0].message.content
+    if eval is None: eval = ""
     return eval
+
+def _generate_branches(
+    model,
+    next_token,
+    kvcache,
+    cur_pos,
+    freqs_cis,
+    logits,
+    metrics,
+    stop_tokens,
+    max_tokens,
+    sampler_cfg,
+    print_stream,
+) -> list[Branch]:
+    sampler_state = SamplerState.BRANCHING
+    branches = []
+    for i, branch_token in enumerate(next_token[0]):
+        branch_token = branch_token.unsqueeze(0)
+        token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
+        prefix = "├─" if i < len(next_token[0]) - 1 else "└─"
+        if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace('\n', '\\n')}[/]", end='')
+        branch_pos = cur_pos + 1
+        kvcache = kvcache.cpu()
+        branch_kvcache = copy.deepcopy(kvcache).to(device)
+        branch_gen_logits = [logits]
+        branch_gen_metrics = [metrics]
+        branch_gen_tokens = [branch_token]
+        branch_gen_tokens_text = [token_text]
+        branch_sampler_states = [sampler_state]
+        if not torch.isin(branch_token, stop_tokens).any():
+            while branch_pos < max_tokens:
+                branch_logits, branch_kvcache, branch_scores, _ = xfmr(
+                    model.weights, model.params, branch_token, branch_pos, freqs_cis[branch_pos:branch_pos + 1], branch_kvcache, attn_mask=None
+                )
+                branch_gen_logits.append(branch_logits)
+                branch_metrics = calculate_metrics(branch_logits, branch_scores)
+                branch_gen_metrics.append(branch_metrics)
+                branch_token, branch_sampler_state = sample(branch_logits, branch_scores, branch_metrics, sampler_cfg, can_branch=False)
+                branch_gen_tokens.append(branch_token)
+                branch_token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
+                branch_gen_tokens_text.append(branch_token_text)
+                branch_sampler_states.append(branch_sampler_state)
+                branch_pos += 1
+                if print_stream:
+                    rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace('\n', '\\n')}[/]", end='')
+                if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
+
+                token_context = branch_gen_tokens_text[:-1]
+                stop = should_stop_branch(branch_token_text, token_context, branch_metrics)
+                if stop:
+                    break
+                if branch_pos >= max_tokens:
+                    break
+        branches.append(
+            Branch(
+                tokens=branch_gen_tokens,
+                kvcache=branch_kvcache.cpu(),
+                cur_pos=branch_pos,
+                tokens_text=branch_gen_tokens_text,
+                metrics=branch_gen_metrics,
+                sampler_states=branch_sampler_states,
+            )
+        )
+    return branches
 
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
@@ -420,55 +486,7 @@ def _generate(
                 if print_stream: rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
                 yield token_text, metrics, sampler_state, None
             else:
-                branches = []
-                for i, branch_token in enumerate(next_token[0]):
-                    branch_token = branch_token.unsqueeze(0)
-                    token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                    prefix = "├─"  if i < len(next_token[0]) - 1 else "└─"
-                    if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace('\n', '\\n')}[/]", end='')
-                    branch_pos = cur_pos + 1
-                    kvcache = kvcache.cpu()
-                    branch_kvcache = copy.deepcopy(kvcache).to(device)
-                    branch_gen_logits = [logits]
-                    branch_gen_metrics = [metrics]
-                    branch_gen_tokens = [branch_token]
-                    branch_gen_tokens_text = [token_text]
-                    branch_sampler_states = [sampler_state]
-                    if not torch.isin(branch_token, stop_tokens).any():
-                        while branch_pos < max_tokens:
-                            branch_logits, branch_kvcache, branch_scores, _ = xfmr(
-                                model.weights, model.params, branch_token, branch_pos, freqs_cis[branch_pos:branch_pos + 1], branch_kvcache, attn_mask=None
-                            )
-                            branch_gen_logits.append(branch_logits)
-                            branch_metrics = calculate_metrics(branch_logits, branch_scores)
-                            branch_gen_metrics.append(branch_metrics)
-                            branch_token, branch_sampler_state = sample(branch_logits, branch_scores, branch_metrics, sampler_cfg, can_branch=False)
-                            branch_gen_tokens.append(branch_token)
-                            branch_token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                            branch_gen_tokens_text.append(branch_token_text)
-                            branch_sampler_states.append(branch_sampler_state)
-                            branch_pos += 1
-                            if print_stream:
-                                rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace('\n', '\\n')}[/]", end='')
-                            if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
-
-                            token_context = branch_gen_tokens_text[:-1]
-                            stop = should_stop_branch(branch_token_text, token_context, branch_metrics)
-                            if stop:
-                                break
-                            if branch_pos >= max_tokens:
-                                break
-                    branches.append(
-                        Branch(
-                            tokens=branch_gen_tokens,
-                            kvcache=branch_kvcache.cpu(),
-                            cur_pos=branch_pos,
-                            tokens_text=branch_gen_tokens_text,
-                            metrics=branch_gen_metrics,
-                            sampler_states=branch_sampler_states,
-                        )
-                    )
-
+                branches = _generate_branches(model, next_token, kvcache, cur_pos, freqs_cis, logits, metrics, stop_tokens, max_tokens, sampler_cfg, print_stream)
                 gen_branches.append([branch.to_dict() for branch in branches])
 
                 # # TODO: other branch evaluation metrics
@@ -491,7 +509,7 @@ def _generate(
                 )
                 analysis_prompt = ""
                 for m in messages:
-                    if m.role == "user":  
+                    if m.role == "user":
                         analysis_prompt += f"{m.role}: {m.content}\n"
                 analysis_prompt += "\n"
 
@@ -502,31 +520,32 @@ def _generate(
 
                 analysis_prompt += "Which candidate branch number is the most relevant and cohere one to continue generatin with? Please think step by step then put your final answer in {branch }. For example: {branch 2}"
 
-                analysis_messages = [Message(role="system", content=analysis_prompt_sys),
-                                    Message(role="user", content=analysis_prompt)]
-                
+                analysis_messages = [Message(role="system", content=analysis_prompt_sys), Message(role="user", content=analysis_prompt)]
+
                 print(analysis_messages)
                 if self_feedback:
-                    decision_gen = list(_generate(
-                        messages=analysis_messages,
-                        model=model,
-                        sampler_cfg=sampler_cfg,
-                        max_tokens=500,
-                        print_stream=True,  
-                        apply_chat_template=True,
-                        firstgenbranch=False,  # Don't allow branching on self-feedback
-                    ))
+                    decision_gen = list(
+                        _generate(
+                            messages=analysis_messages,
+                            model=model,
+                            sampler_cfg=sampler_cfg,
+                            max_tokens=500,
+                            print_stream=True,
+                            apply_chat_template=True,
+                            firstgenbranch=False,  # Don't allow branching on self-feedback
+                        )
+                    )
                     feedbacks = decision_gen[-1][3]
                     decision_response = feedbacks.response.strip()
                 else:
-                    feedbacks = feedback(analysis_messages)
+                    feedbacks = send_api_message(analysis_messages)
                     print(feedbacks)
                     decision_response = feedbacks.strip()
 
                 # Extract the content inside the {}
-                match = re.search(r'\{(.*?)\}', decision_response) 
+                match = re.search(r'\{(.*?)\}', decision_response)
                 if match:
-                    answer_content = match.group(1).strip()  
+                    answer_content = match.group(1).strip()
                     number_match = re.search(r'\b(\d+)\b', answer_content)
                     if number_match:
                         chosen_index = int(number_match.group(1))
