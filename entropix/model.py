@@ -417,7 +417,7 @@ def eval_branches(branches, messages, response, self_feedback, model, sampler_cf
 
     print(analysis_messages)
     if self_feedback:
-        decision_gen = generate(
+        decision = generate(
                 messages=analysis_messages,
                 model=model,
                 sampler_cfg=sampler_cfg,
@@ -426,8 +426,7 @@ def eval_branches(branches, messages, response, self_feedback, model, sampler_cf
                 apply_chat_template=True,
                 allow_branching=False,  # Don't allow branching on self-feedback
         )
-        feedbacks = decision_gen[-1][3]
-        decision_response = feedbacks.response.strip()
+        decision_response = decision.response.strip()
     else:
         feedbacks = send_api_message(analysis_messages)
         print(feedbacks)
