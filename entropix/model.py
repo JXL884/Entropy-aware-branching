@@ -80,6 +80,7 @@ class GenerationData:
             "response": self.response,
             "tokens": self.tokens,
             "messages": [m.model_dump() for m in self.messages],
+            "branches": self.branches,
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_cfg": self.sampler_cfg.model_dump(),
             "sampler_states": [s.name for s in self.sampler_states],
@@ -300,7 +301,7 @@ class Branch:
 
     def to_dict(self):
         return {
-            "tokens": self.tokens,
+            "tokens": [t.item() for t in self.tokens],
             "tokens_text": self.tokens_text,
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_states": [s.name for s in self.sampler_states],
@@ -553,7 +554,6 @@ def _generate(
                 # best_branch = branches[best_branch_idx]
 
                 chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
-
                 best_branch = branches[chosen_index]
 
                 for branch in branches:
