@@ -394,7 +394,7 @@ def _generate_branches(
         )
     return branches
 
-def eval_branches(branches, messages, response, self_feedback, model, sampler_cfg):
+def eval_branches(branches, messages, response, model, sampler_cfg):
     analysis_prompt_sys = (
         "You are an expert evaluator assessing reasoning chains. "
         "Here're several generated candidate branch completions below. "
@@ -416,7 +416,7 @@ def eval_branches(branches, messages, response, self_feedback, model, sampler_cf
     analysis_messages = [Message(role="system", content=analysis_prompt_sys), Message(role="user", content=analysis_prompt)]
 
     print(analysis_messages)
-    if self_feedback:
+    if sampler_cfg.self_feedback:
         decision = generate(
                 messages=analysis_messages,
                 model=model,
@@ -552,7 +552,7 @@ def _generate(
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
 
-                chosen_index = eval_branches(branches, messages, response)
+                chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
 
                 best_branch = branches[chosen_index]
 

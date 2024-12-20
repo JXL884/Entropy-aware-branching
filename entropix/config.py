@@ -115,6 +115,7 @@ class SamplerConfig(BaseModel):
     offsets: Offsets = Offsets()
     coefficients: Coefficients = Coefficients()
     branching: Branching = Branching()
+    self_feedback: bool = False
 
     @model_validator(mode='before')
     def validate_nested_models(cls, values):
