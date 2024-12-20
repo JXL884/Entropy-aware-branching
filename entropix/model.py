@@ -394,6 +394,61 @@ def _generate_branches(
         )
     return branches
 
+def eval_branches(branches, messages, response, self_feedback, model, sampler_cfg):
+    analysis_prompt_sys = (
+        "You are an expert evaluator assessing reasoning chains. "
+        "Here're several generated candidate branch completions below. "
+        "Please choose the most correct and relevant one for the conversation to continue with:\n\n"
+    )
+    analysis_prompt = ""
+    for m in messages:
+        if m.role == "user":
+            analysis_prompt += f"{m.role}: {m.content}\n"
+    analysis_prompt += "\n"
+
+    analysis_prompt += "Previously generated tokens:\n" + response + "\n\n"
+    for i, b in enumerate(branches):
+        completion_text = "".join(b.tokens_text)
+        analysis_prompt += f"branch {i}:\n{completion_text}\n\n"
+
+    analysis_prompt += "Which candidate branch number is the most relevant and cohere one to continue generatin with? Please think step by step then put your final answer in {branch }. For example: {branch 2}"
+
+    analysis_messages = [Message(role="system", content=analysis_prompt_sys), Message(role="user", content=analysis_prompt)]
+
+    print(analysis_messages)
+    if self_feedback:
+        decision_gen = generate(
+                messages=analysis_messages,
+                model=model,
+                sampler_cfg=sampler_cfg,
+                max_tokens=500,
+                print_stream=True,
+                apply_chat_template=True,
+                allow_branching=False,  # Don't allow branching on self-feedback
+        )
+        feedbacks = decision_gen[-1][3]
+        decision_response = feedbacks.response.strip()
+    else:
+        feedbacks = send_api_message(analysis_messages)
+        print(feedbacks)
+        decision_response = feedbacks.strip()
+
+    # Extract the content inside the {}
+    match = re.search(r'\{(.*?)\}', decision_response)
+    if match:
+        answer_content = match.group(1).strip()
+        number_match = re.search(r'\b(\d+)\b', answer_content)
+        if number_match:
+            chosen_index = int(number_match.group(1))
+        else:
+            print("Failed to find a number inside the {}. Defaulting to candidate 0.")
+            chosen_index = 0
+    else:
+        print("Failed to find {} in the response. Defaulting to candidate 0.")
+        chosen_index = 0
+
+    return chosen_index
+
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
@@ -401,8 +456,7 @@ def _generate(
     max_tokens: int | None = None,
     print_stream: bool = False,
     apply_chat_template: bool = True,
-    firstgenbranch: bool = True,
-    self_feedback: bool = False,
+    allow_branching: bool = True,
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Core function to generate text using the transformer model and stream the response out.
@@ -468,8 +522,7 @@ def _generate(
                 scores,
                 metrics,
                 sampler_cfg,
-                can_branch=cur_pos >= seqlen,  # NOTE: disallow branching on the first token
-                firstgenbranch=firstgenbranch,
+                can_branch=allow_branching and cur_pos >= seqlen,  # NOTE: always disallows branching on the first token
             )
 
             if sampler_state != SamplerState.BRANCHING:
@@ -500,61 +553,7 @@ def _generate(
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
 
-                previous_context = "".join(gen_tokens_text)
-
-                analysis_prompt_sys = (
-                    "You are an expert evaluator assessing reasoning chains. "
-                    "Here're several generated candidate branch completions below. "
-                    "Please choose the most correct and relevant one for the conversation to continue with:\n\n"
-                )
-                analysis_prompt = ""
-                for m in messages:
-                    if m.role == "user":
-                        analysis_prompt += f"{m.role}: {m.content}\n"
-                analysis_prompt += "\n"
-
-                analysis_prompt += "Previously generated tokens:\n" + previous_context + "\n\n"
-                for i, b in enumerate(branches):
-                    completion_text = "".join(b.tokens_text)
-                    analysis_prompt += f"branch {i}:\n{completion_text}\n\n"
-
-                analysis_prompt += "Which candidate branch number is the most relevant and cohere one to continue generatin with? Please think step by step then put your final answer in {branch }. For example: {branch 2}"
-
-                analysis_messages = [Message(role="system", content=analysis_prompt_sys), Message(role="user", content=analysis_prompt)]
-
-                print(analysis_messages)
-                if self_feedback:
-                    decision_gen = list(
-                        _generate(
-                            messages=analysis_messages,
-                            model=model,
-                            sampler_cfg=sampler_cfg,
-                            max_tokens=500,
-                            print_stream=True,
-                            apply_chat_template=True,
-                            firstgenbranch=False,  # Don't allow branching on self-feedback
-                        )
-                    )
-                    feedbacks = decision_gen[-1][3]
-                    decision_response = feedbacks.response.strip()
-                else:
-                    feedbacks = send_api_message(analysis_messages)
-                    print(feedbacks)
-                    decision_response = feedbacks.strip()
-
-                # Extract the content inside the {}
-                match = re.search(r'\{(.*?)\}', decision_response)
-                if match:
-                    answer_content = match.group(1).strip()
-                    number_match = re.search(r'\b(\d+)\b', answer_content)
-                    if number_match:
-                        chosen_index = int(number_match.group(1))
-                    else:
-                        print("Failed to find a number inside the {}. Defaulting to candidate 0.")
-                        chosen_index = 0
-                else:
-                    print("Failed to find {} in the response. Defaulting to candidate 0.")
-                    chosen_index = 0
+                chosen_index = eval_branches(branches, messages, response)
 
                 best_branch = branches[chosen_index]
 
@@ -617,6 +616,7 @@ def generate(
     max_tokens: int | None = None,
     print_stream: bool = False,
     apply_chat_template: bool = True,
+    allow_branching: bool = True,
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -625,6 +625,7 @@ def generate(
         max_tokens=max_tokens,
         print_stream=print_stream,
         apply_chat_template=apply_chat_template,
+        allow_branching=allow_branching,
     ):
         if gen is not None:
             return gen

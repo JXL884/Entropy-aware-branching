@@ -236,7 +236,6 @@ def sample(
     pause_token: int = 2564,
     can_branch: bool = False,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),  # generator is seeded by default for reproducibility
-    firstgenbranch: bool = True,
 ) -> Tuple[torch.Tensor, SamplerState]:
     # Low Entropy, Low Varentropy
     # if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
@@ -244,7 +243,7 @@ def sample(
     #     sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
     #     return sampled_token, sampler_state
 
-    if can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high) and firstgenbranch:
+    if can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high):
         sampler_state = SamplerState.BRANCHING
         sampled_tokens = branching_sample(logits, metrics, cfg, generator)
         return sampled_tokens, sampler_state
