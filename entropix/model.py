@@ -19,6 +19,7 @@ from entropix.kvcache import KVCache
 from entropix.sampler import sample
 from entropix.tokenizer import Tokenizer, Message
 from entropix.metrics import AttnMetrics, TokenMetrics, calculate_metrics
+from entropix.PRM import process_response
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -449,9 +450,31 @@ def eval_branches(branches, messages, response, model, sampler_cfg):
 
     return chosen_index
 
+def score_branch(branches, messages, score_model):
+# Prepare inputs for PRM
+    branch_responses = []
+    for i, branch in enumerate(branches):
+        completion_text = "".join(branch.tokens_text)
+        branch_responses.append(f"branch {i}: {completion_text}")
+
+    # Create sample for PRM
+    samples = [f"branch {i}: {branch_responses[i]}" for i, key in enumerate(branch_responses)]
+    analysis_prompt = ""
+    for m in messages:
+        if m.role == "user":  
+            analysis_prompt += f"{m.role}: {m.content}\n"
+    analysis_prompt += "\n"
+
+    # Process the prompt using PRM
+    processed_sample = process_response(analysis_prompt, samples, score_model)
+    chosen_index = processed_sample["step_scores"].index(max(processed_sample["step_scores"]))
+
+    return chosen_index
+
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
+    score_model : Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     print_stream: bool = False,
@@ -553,7 +576,7 @@ def _generate(
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
 
-                chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
+                chosen_index = score_branch(branches, messages, score_model)
                 best_branch = branches[chosen_index]
 
                 for branch in branches:
@@ -611,6 +634,7 @@ def stream(
 def generate(
     messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
+    score_model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
     print_stream: bool = False,
@@ -620,6 +644,7 @@ def generate(
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
         model=model,
+        score_model = score_model,
         sampler_cfg=sampler_cfg,
         max_tokens=max_tokens,
         print_stream=print_stream,

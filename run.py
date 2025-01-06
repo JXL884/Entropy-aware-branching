@@ -3,6 +3,9 @@ from entropix.models import LLAMA_1B, SMOLLM_360M, download_weights
 from entropix.model import load_weights, generate, Model
 from entropix.tokenizer import Tokenizer
 from entropix.plot import plot3d, plot2d
+from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM
+from accelerate import Accelerator
 
 messages = [
     {"role": "system", "content": "You are a super intelligent assistant."},
@@ -26,9 +29,22 @@ tokenizer = Tokenizer(tokenizer_path)
 weights = load_weights(weights_path, model_params)
 model = Model(weights, model_params, tokenizer)
 
+# PRM model
+score_model_name = 'RLHFlow/Llama3.1-8B-PRM-Deepseek-Data'
+accelerator = Accelerator()
+local_rank = accelerator.local_process_index
+score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
+score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name).to(local_rank).eval()
+
+score_tokenizer.padding_side = "right"
+score_tokenizer.pad_token = score_tokenizer.eos_token
+score_model_params.config.pad_token_id = score_model_params.config.eos_token_id
+
+score_model = Model(None, score_model_params, score_tokenizer)
+
 print(f"\nUSER: {messages[1]['content']}")
 
-gen_data = generate(messages, model, sampler_cfg, print_stream=True)
+gen_data = generate(messages, model, score_model, sampler_cfg, print_stream=True)
 
 gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
 
