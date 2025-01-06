@@ -450,22 +450,21 @@ def eval_branches(branches, messages, response, model, sampler_cfg):
 
     return chosen_index
 
-def score_branch(branches, messages, score_model):
-# Prepare inputs for PRM
+def score_branch(branches, messages, response, score_model):
     branch_responses = []
     for i, branch in enumerate(branches):
         completion_text = "".join(branch.tokens_text)
         branch_responses.append(f"branch {i}: {completion_text}")
 
-    # Create sample for PRM
-    samples = [f"branch {i}: {branch_responses[i]}" for i, key in enumerate(branch_responses)]
+    samples = branch_responses
     analysis_prompt = ""
     for m in messages:
         if m.role == "user":  
             analysis_prompt += f"{m.role}: {m.content}\n"
     analysis_prompt += "\n"
 
-    # Process the prompt using PRM
+    analysis_prompt += response
+
     processed_sample = process_response(analysis_prompt, samples, score_model)
     chosen_index = processed_sample["step_scores"].index(max(processed_sample["step_scores"]))
 
@@ -576,7 +575,7 @@ def _generate(
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
 
-                chosen_index = score_branch(branches, messages, score_model)
+                chosen_index = score_branch(branches, messages, response, score_model)
                 best_branch = branches[chosen_index]
 
                 for branch in branches:
