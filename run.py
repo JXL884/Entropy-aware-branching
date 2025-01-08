@@ -44,7 +44,8 @@ score_model = Model(None, score_model_params, score_tokenizer)
 
 print(f"\nUSER: {messages[1]['content']}")
 
-gen_data = generate(messages, model, score_model, sampler_cfg, print_stream=True)
+# feedback_provider should "PRM" or "llama3.3"
+gen_data = generate(messages, model, score_model, sampler_cfg, print_stream=True, feedback_provider="PRM")
 
 gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
 

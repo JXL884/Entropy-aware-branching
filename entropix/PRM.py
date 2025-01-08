@@ -74,7 +74,8 @@ def process_single_prompt(args, score_model):
     print(f"Step Scores: {new_sample['step_scores']}")
 
     return new_sample
-    
+
+# clean this function later
 def process_response(prompt, responses, score_model):
     args = argparse.Namespace(
         num_n=1024,

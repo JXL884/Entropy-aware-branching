@@ -479,6 +479,7 @@ def _generate(
     print_stream: bool = False,
     apply_chat_template: bool = True,
     allow_branching: bool = True,
+    feedback_provider: str = "PRM"
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Core function to generate text using the transformer model and stream the response out.
@@ -490,6 +491,8 @@ def _generate(
         max_tokens: Optional, defaults None. Maximum number of tokens to generate, or the max sequence length of the model if None.
         print_stream: Optional, default False. Flag to print the generated tokens to the console
         apply_chat_template: Optional, default True. Flag to apply the chat template to the input messages
+        allow_branching (bool): Whether branching is allowed.
+        feedback_provider (str): The feedback provider, either "llama3.3" or "PRM".
 
     Yields:
         Tuple of (generated token text, token metrics, sampler state, complete Generation object (at the last token only))
@@ -574,8 +577,13 @@ def _generate(
                 # branch_scores = [score_branch(branch) for branch in branches]
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
-
-                chosen_index = score_branch(branches, messages, response, score_model)
+                
+                if feedback_provider == "llama3.3":
+                    chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
+                elif feedback_provider == "PRM":
+                    chosen_index = score_branch(branches, messages, response, score_model)
+                else:
+                    raise ValueError("Invalid feedback_provider name. Must be 'llama3.3' or 'PRM'.")
                 best_branch = branches[chosen_index]
 
                 for branch in branches:
@@ -639,6 +647,7 @@ def generate(
     print_stream: bool = False,
     apply_chat_template: bool = True,
     allow_branching: bool = True,
+    feedback_provider: str = "PRM"
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
