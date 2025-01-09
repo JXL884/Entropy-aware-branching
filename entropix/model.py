@@ -658,6 +658,7 @@ def generate(
         print_stream=print_stream,
         apply_chat_template=apply_chat_template,
         allow_branching=allow_branching,
+        feedback_provider=feedback_provider
     ):
         if gen is not None:
             return gen
