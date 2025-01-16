@@ -1,6 +1,6 @@
 import json
 import logging
-import math
+import math, random
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -479,7 +479,8 @@ def _generate(
     print_stream: bool = False,
     apply_chat_template: bool = True,
     allow_branching: bool = True,
-    feedback_provider: str = "PRM"
+    feedback_provider: str = "PRM",
+    random_select: bool = False
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Core function to generate text using the transformer model and stream the response out.
@@ -578,12 +579,15 @@ def _generate(
                 # best_branch_idx = branch_scores.index(max(branch_scores))
                 # best_branch = branches[best_branch_idx]
                 
-                if feedback_provider == "llama3.3":
-                    chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
-                elif feedback_provider == "PRM":
-                    chosen_index = score_branch(branches, messages, response, score_model)
+                if random_select:
+                    chosen_index = chosen_index = random.randint(0, 4)  # ablation
                 else:
-                    raise ValueError("Invalid feedback_provider name. Must be 'llama3.3' or 'PRM'.")
+                    if feedback_provider == "llama3.3":
+                        chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
+                    elif feedback_provider == "PRM":
+                        chosen_index = score_branch(branches, messages, response, score_model)
+                    else:
+                        raise ValueError("Invalid feedback_provider name. Must be 'llama3.3' or 'PRM'.")
                 best_branch = branches[chosen_index]
 
                 for branch in branches:
@@ -647,7 +651,8 @@ def generate(
     print_stream: bool = False,
     apply_chat_template: bool = True,
     allow_branching: bool = True,
-    feedback_provider: str = "PRM"
+    feedback_provider: str = "PRM",
+    random_select: bool = False
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -658,7 +663,8 @@ def generate(
         print_stream=print_stream,
         apply_chat_template=apply_chat_template,
         allow_branching=allow_branching,
-        feedback_provider=feedback_provider
+        feedback_provider=feedback_provider,
+        random_select=random_select
     ):
         if gen is not None:
             return gen
