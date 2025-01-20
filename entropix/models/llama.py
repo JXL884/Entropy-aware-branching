@@ -45,3 +45,27 @@ LLAMA_3B = ModelParams(
     rope_theta=_3b_params["rope_theta"],
     use_scaled_rope=_3b_params["use_scaled_rope"]
 )
+
+
+_8b_params = {
+    "head_dim": 128,
+    "hidden_size": 4096,
+    "num_attention_heads": 32,
+    "num_hidden_layers": 32,
+    "num_key_value_heads": 8,
+    "max_seq_len": 8192,
+    "use_scaled_rope": True,
+    "rope_theta": 500000.0,
+}
+LLAMA_8B = ModelParams(
+    name="llama-8b",
+    hf_id="meta-llama/Llama-3.1-8B-Instruct",
+    dim=_8b_params["hidden_size"],
+    n_layers=_8b_params["num_hidden_layers"],
+    n_local_heads=_8b_params["num_attention_heads"],
+    n_local_kv_heads=_8b_params["num_key_value_heads"],
+    head_dim=_8b_params["head_dim"],
+    max_seq_len=_8b_params["max_seq_len"],
+    rope_theta=_8b_params["rope_theta"],
+    use_scaled_rope=_8b_params["use_scaled_rope"]
+)

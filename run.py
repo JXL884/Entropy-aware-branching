@@ -1,11 +1,12 @@
 from entropix.config import SamplerConfig
-from entropix.models import LLAMA_1B, SMOLLM_360M, download_weights
+from entropix.models import LLAMA_1B, LLAMA_3B, LLAMA_8B, SMOLLM_360M, download_weights
 from entropix.model import load_weights, generate, Model
 from entropix.tokenizer import Tokenizer
 from entropix.plot import plot3d, plot2d
 from transformers import AutoTokenizer
 from transformers import AutoModelForCausalLM
 from accelerate import Accelerator
+import torch
 
 messages = [
     {"role": "system", "content": "You are a super intelligent assistant."},
@@ -14,7 +15,7 @@ messages = [
 sampler_cfg = SamplerConfig() # using default config
 
 #for model_params in (LLAMA_1B, SMOLLM_360M):
-model_params = LLAMA_1B
+model_params = LLAMA_8B
 print()
 print("=" * 80)
 print(model_params.name)
@@ -34,7 +35,7 @@ score_model_name = 'RLHFlow/Llama3.1-8B-PRM-Deepseek-Data'
 accelerator = Accelerator()
 local_rank = accelerator.local_process_index
 score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
-score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name).to(local_rank).eval()
+score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to(local_rank).eval()
 
 score_tokenizer.padding_side = "right"
 score_tokenizer.pad_token = score_tokenizer.eos_token
@@ -45,7 +46,7 @@ score_model = Model(None, score_model_params, score_tokenizer)
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, score_model, sampler_cfg, print_stream=True, feedback_provider="PRM")
+gen_data = generate(messages, model, score_model, sampler_cfg, print_stream=True, random_select = True)
 
 gen_data.save(f"{model_params.name}_gen_data.json") # can load output file in entropix-dashboard
 
