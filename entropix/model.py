@@ -14,6 +14,8 @@ import torch
 import torch.nn.functional as F
 from rich import print as rprint
 from openai import OpenAI
+import openai
+from typing import List
 from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState, STATE_COLOR_MAP
 from entropix.kvcache import KVCache
 from entropix.sampler import sample
@@ -74,6 +76,9 @@ class GenerationData:
     metrics: list[TokenMetrics]
     sampler_cfg: SamplerConfig
     sampler_states: list[SamplerState]
+    branch_count: int = 0
+    branch_choices: List[int] = field(default_factory=list)
+    branch_pairwise_similarities: List[List[float]] = field(default_factory=list)
 
     def to_dict(self):
         return {
@@ -85,12 +90,25 @@ class GenerationData:
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_cfg": self.sampler_cfg.model_dump(),
             "sampler_states": [s.name for s in self.sampler_states],
+            "branch_count": self.branch_count,
+            "branch_choices": self.branch_choices,
+            "branch_pairwise_similarities": self.branch_pairwise_similarities,
         }
 
+    # def save(self, fp: str):
+    #     with open(fp, "w") as f:
+    #         s = json.dumps(self.to_dict())
+    #         f.write(s)
+
     def save(self, fp: str):
+        dir_path = os.path.dirname(fp)  # Extract the directory path
+        if dir_path and not os.path.exists(dir_path):
+            os.makedirs(dir_path) 
+
         with open(fp, "w") as f:
             s = json.dumps(self.to_dict())
             f.write(s)
+
 
     @classmethod
     def load(cls, fp: str):
@@ -109,7 +127,7 @@ class GenerationData:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
-        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": ""}
+        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": "", "branch_count": 0, "branch_choices": [], "branch_pairwise_similarities": []}
         for k, default in defaults.items():
             if k not in data:
                 logging.warning(f"Missing field '{k}' in loaded data, using default: {default}")
@@ -470,6 +488,44 @@ def score_branch(branches, messages, response, score_model):
 
     return chosen_index
 
+def get_openai_embeddings(
+    texts: list[str], 
+    model_name: str = "text-embedding-3-large"
+) -> list[list[float]]:
+    """
+    Returns a list of embedding vectors (list of floats) for each text in `texts`.
+    Uses OpenAI's text-embedding-3-large model by default. 
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    assert api_key is not None, "OPENAI_API_KEY environment variable not set"
+    client = OpenAI(api_key=api_key)
+    embeddings = []
+    for text in texts:
+        text = text.replace("\n", " ")
+
+        response = client.embeddings.create(
+            input=[text], 
+            model=model_name
+        )
+
+        embedding = response.data[0].embedding
+        embeddings.append(embedding)
+    return embeddings
+
+def pairwise_cosine_similarity(embeddings: list[list[float]]) -> np.ndarray:
+    """
+    Given a list of embeddings [num_texts x embedding_dim],
+    return the NxN pairwise cosine similarity matrix.
+    """
+    arr = np.array(embeddings)  # shape: (N, embedding_dim)
+    # L2-norm for each row
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)  # shape: (N, 1)
+    arr_normed = arr / (norms + 1e-12)  # avoid zero division
+    # Pairwise dot product
+    sim_matrix = arr_normed @ arr_normed.T  # shape: (N, N)
+    return sim_matrix
+
+
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
     model: Model,
@@ -480,7 +536,8 @@ def _generate(
     apply_chat_template: bool = True,
     allow_branching: bool = True,
     feedback_provider: str = "PRM",
-    random_select: bool = False
+    random_select: bool = False,
+    calculate_sim: bool = False
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     """
     Core function to generate text using the transformer model and stream the response out.
@@ -538,6 +595,9 @@ def _generate(
         gen_metrics = []
         gen_branches = []
         sampler_states = []
+        branch_count = 0
+        branch_choices = []
+        all_pairwise_similarities = []
 
         while cur_pos < max_tokens:
             attn = attn_mask if cur_pos < seqlen else None
@@ -568,16 +628,8 @@ def _generate(
                 branches = _generate_branches(model, next_token, kvcache, cur_pos, freqs_cis, logits, metrics, stop_tokens, max_tokens, sampler_cfg, print_stream)
                 gen_branches.append([branch.to_dict() for branch in branches])
 
-                # # TODO: other branch evaluation metrics
-                # def score_branch(branch: Branch):
-                #     # score = negative average entropy of the branch tokens
-                #     entropies = [metrics.logit_entropy for metrics in branch.metrics]
-                #     avg_entropy = sum(entropies) / len(entropies)
-                #     return -avg_entropy
-
-                # branch_scores = [score_branch(branch) for branch in branches]
-                # best_branch_idx = branch_scores.index(max(branch_scores))
-                # best_branch = branches[best_branch_idx]
+                # Increment your branch counter
+                branch_count += 1
                 
                 if random_select:
                     chosen_index = chosen_index = random.randint(0, 4)  # ablation
@@ -589,6 +641,23 @@ def _generate(
                     else:
                         raise ValueError("Invalid feedback_provider name. Must be 'llama3.3' or 'PRM'.")
                 best_branch = branches[chosen_index]
+
+                # Record the choice
+                branch_choices.append(chosen_index)
+
+
+                branch_texts = []
+                for b in branches:
+                    text = "".join(b.tokens_text)
+                    branch_texts.append(text)
+
+                if len(branches) > 1:
+                    embeddings = get_openai_embeddings(branch_texts, model_name="text-embedding-3-large")
+                    sim_matrix = pairwise_cosine_similarity(embeddings)
+                else:
+                    # Only 1 branch => trivial 1x1 matrix
+                    sim_matrix = np.array([[1.0]])
+                all_pairwise_similarities.append(sim_matrix.tolist())    
 
                 for branch in branches:
                     if branch != best_branch:
@@ -621,6 +690,9 @@ def _generate(
             metrics=gen_metrics,
             sampler_cfg=sampler_cfg,
             sampler_states=sampler_states,
+            branch_count=branch_count,
+            branch_choices=branch_choices,
+            branch_pairwise_similarities=all_pairwise_similarities
         )
         yield "", metrics, sampler_state, gen
 
@@ -652,7 +724,8 @@ def generate(
     apply_chat_template: bool = True,
     allow_branching: bool = True,
     feedback_provider: str = "PRM",
-    random_select: bool = False
+    random_select: bool = False,
+    calculate_sim: bool = False
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -664,7 +737,8 @@ def generate(
         apply_chat_template=apply_chat_template,
         allow_branching=allow_branching,
         feedback_provider=feedback_provider,
-        random_select=random_select
+        random_select=random_select,
+        calculate_sim=calculate_sim
     ):
         if gen is not None:
             return gen
