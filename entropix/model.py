@@ -453,9 +453,9 @@ def eval_branches(branches, messages, response, model, sampler_cfg):
         decision_response = feedbacks.strip()
 
     # Extract the content inside the {}
-    match = re.search(r'\{(.*?)\}', decision_response)
+    match = re.findall(r'\{(.*?)\}', decision_response)
     if match:
-        answer_content = match.group(1).strip()
+        answer_content = match.group[-1].strip()
         number_match = re.search(r'\b(\d+)\b', answer_content)
         if number_match:
             chosen_index = int(number_match.group(1))
