@@ -3,7 +3,7 @@ Source code for paper "Entropy-Aware Branching for Improved Mathematical Reasoni
 
 Thanks to [xjdr's entropix project](https://github.com/xjdr-alt/entropix) for inspiration and [Sinatras & citizenhicks smolLM implementation](https://github.com/SinatrasC/entropix-smollm) for the basis of the visualizations.
 
-Supports `Llama-3.2-1b`, `Llama-3.2-3b` and `Llama-3.1-8b` models & easy to add more.
+Supports huggingface models & easy to add more by change the model name/config in run.py + threshold tuning
 
 ## Getting Started
 
