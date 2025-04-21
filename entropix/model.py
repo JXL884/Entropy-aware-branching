@@ -861,7 +861,7 @@ def _generate(
                 can_branch=allow_branching and cur_pos >= seqlen,  # NOTE: always disallows branching on the first token
             )
             if cur_pos < seqlen + 5:
-                sampler_state = SamplerState.ARGMAX:
+                sampler_state = SamplerState.ARGMAX
             if sampler_state != SamplerState.BRANCHING:
                 gen_logits.append(logits)
                 gen_metrics.append(metrics)
