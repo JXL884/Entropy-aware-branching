@@ -478,7 +478,8 @@ def _generate(
     allow_branching: bool = True,
     feedback_provider: str = "PRM",
     random_select: bool = False,
-    calculate_sim: bool = False
+    calculate_sim: bool = False,
+    do_insert: bool = False
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
 
     # (A) Initialize the "oh wait" cooldown
@@ -579,7 +580,7 @@ def _generate(
             # CASE 1: SamplerState.ARGMAX (normal decoding)
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
-                if cur_pos == seqlen:
+                if cur_pos == seqlen and do_insert:
                     # First token, we need to insert the first token
                     gen_logits.append(logits)
                     gen_metrics.append(metrics)
@@ -779,7 +780,8 @@ def generate(
     allow_branching: bool = True,
     feedback_provider: str = "PRM",
     random_select: bool = False,
-    calculate_sim: bool = False
+    calculate_sim: bool = False,
+    do_insert: bool = False
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -792,7 +794,8 @@ def generate(
         allow_branching=allow_branching,
         feedback_provider=feedback_provider,
         random_select=random_select,
-        calculate_sim=calculate_sim
+        calculate_sim=calculate_sim,
+        do_insert=do_insert
     ):
         if gen is not None:
             return gen
