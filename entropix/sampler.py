@@ -171,47 +171,12 @@ def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerCo
     # NOTE: only using temperature sampling in branches right now
     # TODO: cleanup / setup AB tests to find best branch sampling method
 
-    # top_k = max(5, int(cfg.top_k * (1 + 0.5 * (1 - metrics.agreement))))
-    # top_p = cfg.top_p
-    # min_p = cfg.min_p
-
     device = logits.device
     logits = logits[:, -1]
 
-    # # Apply temperature
-    # logits = logits / temperature
-    
     # # Convert logits to probabilities
     probs = F.softmax(logits, dim=-1)
-    #
-    # # Apply min_p filtering
-    # if min_p > 0.0:
-    #     p_max = torch.max(probs)
-    #     min_prob = min_p * p_max
-    #     probs = torch.where(probs >= min_prob, probs, torch.tensor(0.0, device=device))
-    #
-    # # Apply top-k filtering
-    # if top_k > 0 and top_k < probs.numel():
-    #     top_k_probs, top_k_indices = torch.topk(probs, k=top_k)
-    #     probs = torch.zeros_like(probs).scatter_(dim=-1, index=top_k_indices, src=top_k_probs)
-    #
-    # # Apply top-p (nucleus) filtering
-    # if top_p < 1.0:
-    #     sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-    #     cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-    #     mask = cumulative_probs - sorted_probs > top_p
-    #     sorted_probs[mask] = 0.0
-    #     probs = torch.zeros_like(probs).scatter_(dim=-1, index=sorted_indices, src=sorted_probs)
-    #
-    # # Normalize the probabilities
-    # probs_sum = probs.sum()
-    # if probs_sum == 0:
-    #     # If all probabilities are zero, fallback to uniform distribution over all tokens
-    #     probs = torch.ones_like(probs) / probs.numel()
-    # else:
-    #     probs = probs / probs_sum
-    #
-    # # Count the number of non-zero probabilities
+ 
     num_available_tokens = int((probs > 0).sum().item())
 
     # Adjust num_samples if necessary
@@ -220,22 +185,19 @@ def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerCo
     if num_samples_to_draw == 0:
         raise ValueError("No tokens available to sample after filtering. Adjust the sampling parameters.")
 
-    # Sample tokens
-    # sampled_tokens = torch.multinomial(probs, num_samples=num_samples_to_draw, generator=generator)
-
     # currently the shape is [[num_samples]] help me flatten it to just [num_samples]
     sampled_tokens = temperature_sample(logits, temperature=temperature, num_samples=num_samples_to_draw, generator=generator)
     # sampled_tokens = sampled_tokens.squeeze(0)  # Remove the extra dimension
     return sampled_tokens.to(torch.int32)  
 
 def sample(
-    logits: torch.Tensor,  # logits (distribution over all possible choices) of the next token
-    attention_scores: torch.Tensor,  # internal attention scores (Q⋅Kᵀ)/√d
+    logits: torch.Tensor,
+    attention_scores: torch.Tensor,
     metrics: TokenMetrics,
     cfg: SamplerConfig,
-    pause_token: int = 2564,
     can_branch: bool = False,
-    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),  # generator is seeded by default for reproducibility
+    generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
+    current_step: int = 0,
 ) -> Tuple[torch.Tensor, SamplerState]:
     # Low Entropy, Low Varentropy
     # if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
@@ -243,44 +205,24 @@ def sample(
     #     sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
     #     return sampled_token, sampler_state
 
-    if can_branch and (metrics.logit_entropy > cfg.thresholds.logit_entropy.high and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high):
-        sampler_state = SamplerState.BRANCHING
-        sampled_tokens = branching_sample(logits, metrics, cfg, generator)
-        return sampled_tokens, sampler_state
+    if can_branch and (
+        metrics.logit_entropy > cfg.thresholds.logit_entropy.high
+        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high and current_step > 20
+    ):
+        # (A) Check if we're still on cooldown
+        if (current_step - cfg.last_pause_step) < cfg.cooldown_length:
+            # Too soon since last PAUSE => skip pause
+            sampler_state = SamplerState.ARGMAX
+            sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+            return sampled_token, sampler_state
+        else:
+            # Allowed to pause
+            cfg.last_pause_step = current_step  # record we triggered pause now
+            sampler_state = SamplerState.PAUSE
+            sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+            return sampled_token, sampler_state
 
-    # High Entropy, Low Varentropy TODO: inject "wait..." or something like that
-    # NOTE: should either dynamically find the token from the tokenizer here, or accept it as a param and do so in generate
-
-    # elif logit_entropy > cfg.thresholds.entropy.high and logit_varentropy < cfg.thresholds.varentropy.low:
-    #     sampler_state = SamplerState.TREADING
-    #     # TODO: change how we insert thinking tokens
-    #     # Insert a clarifying question token if not already present
-    #     if not torch.isin(gen_tokens[:, -1], torch.tensor([clarifying_question_token], device=device, dtype=gen_tokens.dtype)).any():
-    #         sampled_token = torch.tensor([[clarifying_question_token]], dtype=torch.int32, device=device)
-    #         return sampled_token, sampler_state
-    #     else:
-    #         # TODO: need a better way to check for this?
-    #         pass
-    #         # If we've just asked a question, sample with slightly higher temperature
-    #         # temp_adj = cfg.high_entropy_attention_offset + cfg.high_entropy_attention_coefficient * attn_entropy
-    #         sampled_token = _sample(
-    #             # WARNING: hardcoded temporarily
-    #             logits,
-    #             temperature=min(1.5, cfg.temperature * 1.5),
-    #             top_p=cfg.top_p,
-    #             top_k=cfg.top_k,
-    #             min_p=cfg.min_p,
-    #             generator=generator
-    #         )
-    #         return sampled_token, sampler_state
-
-    else:
-        sampler_state = SamplerState.ARGMAX
-        sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-        return sampled_token, sampler_state
-    # else:  # All other cases: use adaptive sampling
-    #     # TODO: break this out to its own function, revist how we are doing "adaptive sampling" **OR** just use a simpler sampler method
-    #     sampler_state = SamplerState.ADAPTIVE
-    #     # sampled_token = adaptive_sample(logits, metrics, cfg, epsilon=0.1, generator=generator)
-    #     sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
-    #     return sampled_token, sampler_state
+    # Otherwise, normal flow => Argmax or other sampling
+    sampler_state = SamplerState.ARGMAX
+    sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+    return sampled_token, sampler_state

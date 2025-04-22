@@ -1,5 +1,5 @@
 from entropix.config import SamplerConfig, Thresholds, ThresholdLevel, Branching
-from entropix.model import load_weights, generate, Model
+from entropix.model import generate, Model
 from entropix.tokenizer import Tokenizer
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 from transformers import AutoModelForCausalLM
@@ -14,24 +14,40 @@ messages = [
     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
 ]
 
+messages = [
+    {"role": "system", "content": "You are an expert financial analyst. "
+    " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
+    "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
+    "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
+    "Finally, indicate the correct answer: A, B, or C."},
+    {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
+
+    "A. [124.5; 135.5]. "
+    "B. [125;135]. "
+    "C. [130; 135.5]."},
+]
+
 thresholds = Thresholds(
-    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2.3),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=6)
+    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
+    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=4)
 )
 
-branching = Branching(num_samples = 5)
+branching = Branching(num_samples = 1)
 
 sampler_cfg = SamplerConfig(
     thresholds=thresholds,
     branching=branching
 )
 
+# MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+
 # Load the model and tokenizer
-# base_model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
+base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 config = base_model.config
+
+
 
 # some config parameters are not compatible with the old ones, only part we need to change
 config_overrides = {
