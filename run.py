@@ -16,7 +16,7 @@ messages = [
 
 thresholds = Thresholds(
     logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2.3),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=6)
+    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=4)
 )
 
 branching = Branching(num_samples = 5)

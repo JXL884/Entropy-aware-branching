@@ -858,7 +858,7 @@ def _generate(
                 scores,
                 metrics,
                 sampler_cfg,
-                can_branch=allow_branching and cur_pos >= seqlen,  # NOTE: always disallows branching on the first token
+                can_branch=allow_branching and cur_pos >= seqlen + 10,  # NOTE: always disallows branching on the first token
             )
             if sampler_state != SamplerState.BRANCHING:
                 gen_logits.append(logits)
