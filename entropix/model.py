@@ -900,7 +900,7 @@ def _generate(
                     text = "".join(b.tokens_text)
                     branch_texts.append(text)
 
-                if len(branches) > 1:
+                if len(branches) > 1 and calculate_sim:
                     embeddings = get_openai_embeddings(branch_texts, model_name="text-embedding-3-large")
                     sim_matrix = pairwise_cosine_similarity(embeddings)
                 else:
