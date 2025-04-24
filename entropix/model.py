@@ -913,7 +913,7 @@ def _generate(
                         del branch
 
                 next_token = best_branch.tokens[-1]
-                past_key_values = best_branch.kvcache.to(device)
+                past_key_values = best_branch.kvcache
                 cur_pos = best_branch.cur_pos
                 freqs_end = cur_pos + 1
                 gen_tokens = torch.cat([gen_tokens, torch.tensor(best_branch.tokens, device=device).unsqueeze(0)], dim=1)
