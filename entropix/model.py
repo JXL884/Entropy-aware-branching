@@ -479,7 +479,8 @@ def _generate(
     feedback_provider: str = "PRM",
     random_select: bool = False,
     calculate_sim: bool = False,
-    do_insert: bool = False
+    do_insert: bool = False,
+    insert_text: str | None = None
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
 
     # (A) Initialize the "oh wait" cooldown
@@ -603,7 +604,7 @@ def _generate(
                         response, gen_logits, gen_metrics, sampler_states,
                         sampler_cfg, allow_branching, print_stream,
                         include_trigger_token=True,
-                        insert_text=" To answer this question, I need to plan "
+                        insert_text=insert_text
                     )
                 # if torch.isin(next_token, stop_tokens).any() and not track_end:
                 #     track_end = True
@@ -781,7 +782,8 @@ def generate(
     feedback_provider: str = "PRM",
     random_select: bool = False,
     calculate_sim: bool = False,
-    do_insert: bool = False
+    do_insert: bool = False,
+    insert_text: str = " oh wait"
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -795,7 +797,8 @@ def generate(
         feedback_provider=feedback_provider,
         random_select=random_select,
         calculate_sim=calculate_sim,
-        do_insert=do_insert
+        do_insert=do_insert,
+        insert_text=insert_text
     ):
         if gen is not None:
             return gen
