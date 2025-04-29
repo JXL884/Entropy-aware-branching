@@ -85,7 +85,7 @@ model = Model(base_model, config, tokenizer)
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, random_select = False, do_insert = True, insert_text=" To answer this question, let me think step by step. ")
+gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, random_select = False, do_insert = True, insert_text= " To answer this question, we need to first define the relevant terms and formulas ")
 
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 

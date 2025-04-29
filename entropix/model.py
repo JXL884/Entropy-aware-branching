@@ -422,7 +422,6 @@ def insert_tokens(
             rprint(f"[{STATE_COLOR_MAP[SamplerState.ARGMAX]}]{token_text}[/]", end='')
         yield token_text, metrics, SamplerState.ARGMAX, None
 
-
     # 2) Insert whatever
     insert_ids = model.tokenizer.encode(insert_text, add_special_tokens=False)
     for rid in insert_ids:
@@ -454,6 +453,8 @@ def insert_tokens(
 
         cur_pos += 1
 
+        yield token_text, forced_metrics, SamplerState.PAUSE, None
+
     # 3) Sample a new next_token
     next_token, sampler_state = sample(
         forced_logits,
@@ -463,7 +464,7 @@ def insert_tokens(
         can_branch=allow_branching and cur_pos >= seqlen,
         current_step=cur_pos
     )
-
+    token_text = model.tokenizer.decode([next_token.item()])
     # 4) Yield the last inserted token
     yield token_text, forced_metrics, SamplerState.PAUSE, None
 
@@ -513,13 +514,17 @@ def _generate(
     assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
     messages: list[Message] = messages  # type: ignore
     if apply_chat_template:
-        prompt = model.tokenizer.apply_chat_template(messages)
+        #print("The prompt is", messages)
+        prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        print(messages)
 
     if print_stream:
         print()
         for state, color in STATE_COLOR_MAP.items():
             rprint(f"[{color}]■[/] [dim]{state.value}[/]")
         print()
+
+    #print("The prompt is", prompt)
 
     with torch.inference_mode():
         tokens = torch.tensor([prompt], dtype=torch.long).to(device)
@@ -558,7 +563,7 @@ def _generate(
             num_tokens_so_far = gen_tokens.shape[1]
             next_token, sampler_state = sample(
                 logits,
-                scores,
+                scores,  
                 metrics,
                 sampler_cfg,
                 can_branch=allow_branching and cur_pos >= seqlen,
@@ -581,31 +586,23 @@ def _generate(
             # CASE 1: SamplerState.ARGMAX (normal decoding)
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
-                if cur_pos == seqlen and do_insert:
-                    # First token, we need to insert the first token
-                    gen_logits.append(logits)
-                    gen_metrics.append(metrics)
-                    sampler_states.append(sampler_state)
-
-                    # Move cur_pos forward (first step => from 0 to seqlen, else increment)
+                if cur_pos == seqlen and do_insert:    
                     cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
 
-                    gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-                    token_text = model.tokenizer.decode([next_token.item()])
-                    gen_tokens_text.append(token_text)
-                    response += token_text
-                    if print_stream:
-                        rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
-                    
-                    yield from insert_tokens(
+                    for token_text, metrics, state, _ in insert_tokens(
                         model,
                         next_token, past_key_values, logits, metrics,
                         cur_pos, seqlen, gen_tokens, gen_tokens_text,
                         response, gen_logits, gen_metrics, sampler_states,
                         sampler_cfg, allow_branching, print_stream,
-                        include_trigger_token=True,
+                        include_trigger_token=False,
                         insert_text=insert_text
-                    )
+                    ):
+                        yield token_text, metrics, state, None
+                        last_yielded = token_text
+                    # After insertion, decode the last token to set next_token
+                    if last_yielded:
+                        next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
                 # if torch.isin(next_token, stop_tokens).any() and not track_end:
                 #     track_end = True
                 #     if print_stream:
@@ -619,22 +616,6 @@ def _generate(
                 #         include_trigger_token=False,
                 #         insert_text=" oh wait"
                 #     )
-                if torch.isin(next_token, stop_tokens).any():
-                    gen_logits.append(logits)
-                    gen_metrics.append(metrics)
-                    sampler_states.append(sampler_state)
-
-                    # Move cur_pos forward (first step => from 0 to seqlen, else increment)
-                    cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-
-                    gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-                    token_text = model.tokenizer.decode([next_token.item()])
-                    gen_tokens_text.append(token_text)
-                    response += token_text
-                    if print_stream:
-                        rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
-                    yield token_text, metrics, sampler_state, None
-                    break
                 else:
                     gen_logits.append(logits)
                     gen_metrics.append(metrics)
@@ -650,6 +631,10 @@ def _generate(
 
                     if print_stream:
                         rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
+
+                    if torch.isin(next_token, stop_tokens).any():
+                        yield token_text, metrics, sampler_state, None
+                        break
 
                     yield token_text, metrics, sampler_state, None
 
