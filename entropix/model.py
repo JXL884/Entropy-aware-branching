@@ -455,18 +455,18 @@ def insert_tokens(
 
         yield token_text, forced_metrics, SamplerState.PAUSE, None
 
-    # 3) Sample a new next_token
-    next_token, sampler_state = sample(
-        forced_logits,
-        forced_scores,
-        forced_metrics,
-        sampler_cfg,
-        can_branch=allow_branching and cur_pos >= seqlen,
-        current_step=cur_pos
-    )
-    token_text = model.tokenizer.decode([next_token.item()])
-    # 4) Yield the last inserted token
-    yield token_text, forced_metrics, SamplerState.PAUSE, None
+    # # 3) Sample a new next_token
+    # next_token, sampler_state = sample(
+    #     forced_logits,
+    #     forced_scores,
+    #     forced_metrics,
+    #     sampler_cfg,
+    #     can_branch=allow_branching and cur_pos >= seqlen,
+    #     current_step=cur_pos
+    # )
+    # token_text = model.tokenizer.decode([next_token.item()])
+    # # 4) Yield the last inserted token
+    # yield token_text, forced_metrics, SamplerState.PAUSE, None
 
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
@@ -529,7 +529,7 @@ def _generate(
     with torch.inference_mode():
         tokens = torch.tensor([prompt], dtype=torch.long).to(device)
         bs, seqlen = tokens.shape
-        cur_pos = 0
+        cur_pos = seqlen
 
         next_token = tokens
         gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
@@ -547,6 +547,7 @@ def _generate(
         track_end = False
 
         while cur_pos < max_tokens:
+            #print("cur_pos", cur_pos)
             outputs = model.weights(
                 input_ids=next_token,
                 past_key_values=past_key_values,
@@ -587,8 +588,7 @@ def _generate(
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
                 if cur_pos == seqlen and do_insert:    
-                    cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-
+                    insert_count = 0
                     for token_text, metrics, state, _ in insert_tokens(
                         model,
                         next_token, past_key_values, logits, metrics,
@@ -599,10 +599,14 @@ def _generate(
                         insert_text=insert_text
                     ):
                         yield token_text, metrics, state, None
+                        insert_count += 1
                         last_yielded = token_text
                     # After insertion, decode the last token to set next_token
                     if last_yielded:
                         next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
+                    cur_pos += insert_count
+                    #print("inserted", insert_count, "tokens")
+
                 # if torch.isin(next_token, stop_tokens).any() and not track_end:
                 #     track_end = True
                 #     if print_stream:
