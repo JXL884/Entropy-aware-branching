@@ -14,18 +14,18 @@ messages = [
     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
 ]
 
-messages = [
-    {"role": "system", "content": "You are an expert financial analyst. "
-    " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
-    "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
-    "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
-    "Finally, indicate the correct answer: A, B, or C."},
-    {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
+# messages = [
+#     {"role": "system", "content": "You are an expert financial analyst. "
+#     " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
+#     "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
+#     "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
+#     "Finally, indicate the correct answer: A, B, or C."},
+#     {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
 
-    "A. [124.5; 135.5]. "
-    "B. [125;135]. "
-    "C. [130; 135.5]."},
-]
+#     "A. [124.5; 135.5]. "
+#     "B. [125;135]. "
+#     "C. [130; 135.5]."},
+# ]
 
 thresholds = Thresholds(
     logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
@@ -40,10 +40,10 @@ sampler_cfg = SamplerConfig(
 )
 
 # MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
 # Load the model and tokenizer
-base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 config = base_model.config
 
@@ -85,7 +85,7 @@ model = Model(base_model, config, tokenizer)
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, random_select = False, do_insert = True, insert_text= " To answer this question, we need to first define the relevant terms and formulas. ")
+gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False, do_insert = False, insert_text= " let me double check if my current approach is working. ")
 
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 

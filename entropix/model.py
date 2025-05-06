@@ -3,13 +3,10 @@ import logging
 import math, random
 import os
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any, Generator, NamedTuple, Optional, Tuple
 import copy
 import re
-import jax.numpy as jnp
 import numpy as np
-from scipy.special import kv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -579,8 +576,9 @@ def _generate(
 
             if track_pause and should_stop_branch(token_text, gen_tokens_text):
                 #print("pausing now")
-                sampler_state = SamplerState.ARGMAX
-                # sampler_state = SamplerState.PAUSE
+                # uncomment this to not insert anything
+                # sampler_state = SamplerState.ARGMAX
+                sampler_state = SamplerState.PAUSE
                 track_pause = False
 
             # ──────────────────────────────────────────────────────────────────
@@ -604,22 +602,29 @@ def _generate(
                     # After insertion, decode the last token to set next_token
                     if last_yielded:
                         next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
-                    cur_pos += insert_count
+                    #cur_pos += insert_count
                     #print("inserted", insert_count, "tokens")
 
-                # if torch.isin(next_token, stop_tokens).any() and not track_end:
-                #     track_end = True
-                #     if print_stream:
-                #         rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
-                #     yield from insert_tokens(
-                #         model,
-                #         next_token, past_key_values, logits, metrics,
-                #         cur_pos, seqlen, gen_tokens, gen_tokens_text,
-                #         response, gen_logits, gen_metrics, sampler_states,
-                #         sampler_cfg, allow_branching, print_stream,
-                #         include_trigger_token=False,
-                #         insert_text=" oh wait"
-                #     )
+                if torch.isin(next_token, stop_tokens).any() and not track_end:
+                    track_end = True
+                    if print_stream:
+                        rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
+                    insert_count = 0
+                    for token_text, metrics, state, _ in insert_tokens(
+                        model,
+                        next_token, past_key_values, logits, metrics,
+                        cur_pos, seqlen, gen_tokens, gen_tokens_text,
+                        response, gen_logits, gen_metrics, sampler_states,
+                        sampler_cfg, allow_branching, print_stream,
+                        include_trigger_token=False,
+                        insert_text=insert_text
+                    ):
+                        yield token_text, metrics, state, None
+                        insert_count += 1
+                        last_yielded = token_text
+                    if last_yielded:
+                        next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
+                    #cur_pos += insert_count
                 else:
                     gen_logits.append(logits)
                     gen_metrics.append(metrics)
@@ -708,20 +713,23 @@ def _generate(
             # CASE 3: SamplerState.PAUSE (we want to forcibly insert " oh wait")
             # ──────────────────────────────────────────────────────────────────
             elif sampler_state == SamplerState.PAUSE:
-                last_yielded = None
+                insert_count = 0
                 for token_text, metrics, state, _ in insert_tokens(
                     model,
                     next_token, past_key_values, logits, metrics,
                     cur_pos, seqlen, gen_tokens, gen_tokens_text,
                     response, gen_logits, gen_metrics, sampler_states,
-                    sampler_cfg, allow_branching, print_stream, include_trigger_token=True,
-                    insert_text=" also, "):
+                    sampler_cfg, allow_branching, print_stream,
+                    include_trigger_token=True,
+                    insert_text=insert_text
+                ):
                     yield token_text, metrics, state, None
+                    insert_count += 1
                     last_yielded = token_text
                 # After insertion, decode the last token to set next_token
                 if last_yielded:
                     next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
-
+                #cur_pos += insert_count
 
         # Build final GenerationData if you want
         messages.append(Message(role="assistant", content=response))
