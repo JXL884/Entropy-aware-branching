@@ -796,7 +796,7 @@ def _generate(
         messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
     assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
     messages: list[Message] = messages  # type: ignore
-    if apply_chat_template: prompt = model.tokenizer.apply_chat_template(messages)
+    if apply_chat_template: prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
 
     if print_stream:
         print()
