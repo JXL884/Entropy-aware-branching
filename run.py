@@ -2,7 +2,7 @@ from entropix.config import SamplerConfig, Thresholds, ThresholdLevel, Branching
 from entropix.model import generate, Model
 from entropix.tokenizer import Tokenizer
 from transformers import AutoTokenizer, Qwen2ForCausalLM
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from entropix.plot import plot3d, plot2d
 from transformers import AutoTokenizer
 from accelerate import Accelerator
@@ -27,41 +27,74 @@ messages = [
 #     "C. [130; 135.5]."},
 # ]
 
+messages = [
+    {"role": "system", "content": "You are a super intelligent assistant."},
+    {"role": "user", "content": "how many letter 'r' are there in the word 'strawberry'?"},
+]
+
 thresholds = Thresholds(
     logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
     logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=4)
 )
 
-branching = Branching(num_samples = 1)
+branching = Branching(num_samples = 5)
 
 sampler_cfg = SamplerConfig(
     thresholds=thresholds,
     branching=branching
 )
 
+quantization_config = BitsAndBytesConfig(
+   load_in_4bit=True,
+   bnb_4bit_quant_type="nf4",
+   bnb_4bit_use_double_quant=True,
+   bnb_4bit_compute_dtype=torch.bfloat16
+)
+
 # MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+model_name = "Qwen_3B"
 
 # Load the model and tokenizer
-base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto")
+base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto", torch_dtype="auto",
+                                                  quantization_config=quantization_config)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 config = base_model.config
 
-
-
-# some config parameters are not compatible with the old ones, only part we need to change
 config_overrides = {
+"Qwen_1B": {
     "head_dim": 128,
     "use_scaled_rope": False,
     "n_layers": 28,
     "n_local_kv_heads": 2,
     "n_local_heads": 12
-}
+},
+"Qwen_3B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 36,
+    "n_local_kv_heads": 2,
+    "n_local_heads": 16
+},
+"Qwen_7B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 28,
+    "n_local_kv_heads": 4,
+    "n_local_heads": 28
+}}
 
-# Update the config dynamically if the attribute exists
-for attr_name, value in config_overrides.items():
-    setattr(base_model.config, attr_name, value)
+# Function to apply config overrides
+def apply_config_overrides(model, config_name, config_overrides):
+    if config_name not in config_overrides.keys():
+        raise ValueError(f"Config {config_name} not found!")
+    
+    config_overrides = config_overrides[config_name]
+    for attr_name, value in config_overrides.items():
+        setattr(model.config, attr_name, value)
 
+
+apply_config_overrides(base_model, model_name, config_overrides)
 
 config = base_model.config
 # Now model.config has the old key names (n_layer, n_embd, etc.)
@@ -76,16 +109,16 @@ model = Model(base_model, config, tokenizer)
 # score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
 # score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to(local_rank).eval()
 
-# score_tokenizer.padding_side = "right"
-# score_tokenizer.pad_token = score_tokenizer.eos_token
-# score_model_params.config.pad_token_id = score_model_params.config.eos_token_id
-
 # score_model = Model(None, score_model_params, score_tokenizer)
  
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False, do_insert = False, insert_text= " let me double check if my current approach is working. ")
+gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False,
+                     do_insert = False, insert_text= " Let's double check that.\n\n")
+                     #" <|im_start|>user \n"
+                     # " oh wait... <|im_end|> \n"
+                     #   " <|im_start|>assistant")
 
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 
