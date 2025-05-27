@@ -195,157 +195,6 @@ def send_api_message(messages: list[Message]):
     if eval is None: eval = ""
     return eval
 
-def _generate_branches(
-    model,
-    next_token,
-    kvcache,
-    cur_pos,
-    logits,
-    metrics,
-    stop_tokens,
-    max_tokens,
-    sampler_cfg,
-    print_stream,
-) -> list[Branch]:
-    sampler_state = SamplerState.BRANCHING
-    branches = []
-    for i, branch_token in enumerate(next_token[0]):
-        branch_token = branch_token.unsqueeze(0)
-        token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-        prefix = "├─" if i < len(next_token[0]) - 1 else "└─"
-        if print_stream: rprint(f"\n[{STATE_COLOR_MAP[sampler_state]}]{prefix} {token_text.replace('\n', '\\n')}[/]", end='')
-        branch_pos = cur_pos + 1
-        # kvcache = kvcache.cpu()
-        branch_kvcache = copy.deepcopy(kvcache)
-        branch_gen_logits = [logits]
-        branch_gen_metrics = [metrics]
-        branch_gen_tokens = [branch_token]
-        branch_gen_tokens_text = [token_text]
-        branch_sampler_states = [sampler_state]
-        if not torch.isin(branch_token, stop_tokens).any():
-            while branch_pos < max_tokens:
-                # branch_logits, branch_kvcache, branch_scores, _ = xfmr(
-                #     model.weights, model.params, branch_token, branch_pos, freqs_cis[branch_pos:branch_pos + 1], branch_kvcache, attn_mask=None
-                # )
-                if branch_token.dim() == 1:
-                    branch_token = branch_token.unsqueeze(0)  # [1] -> [1,1]
-                #print("branch_token", branch_token.shape, branch_token)
-                outputs = model.weights(
-                    input_ids=branch_token,         # shape [1,1] (the new token)
-                    past_key_values=branch_kvcache,    # the branch's KV state
-                    use_cache=True,
-                    output_attentions=True
-                )
-
-                # -- 2) Extract model outputs
-                branch_logits = outputs.logits               # shape [1,1,vocab_size]
-                branch_scores = outputs.attentions[-1]       # final layer attention
-                branch_kvcache = outputs.past_key_values 
-
-                branch_gen_logits.append(branch_logits)
-                branch_metrics = calculate_metrics(branch_logits, branch_scores)
-                branch_gen_metrics.append(branch_metrics)
-                branch_token, branch_sampler_state = sample(branch_logits, branch_scores, branch_metrics, sampler_cfg, can_branch=False)
-                branch_gen_tokens.append(branch_token)
-                branch_token_text = model.tokenizer.decode([branch_token.item()])  # type: ignore (torch.int32 not recognized as int)
-                branch_gen_tokens_text.append(branch_token_text)
-                branch_sampler_states.append(branch_sampler_state)
-                branch_pos += 1
-                if print_stream:
-                    rprint(f"[{STATE_COLOR_MAP[branch_sampler_state]}]{branch_token_text.replace('\n', '\\n')}[/]", end='')
-                if torch.isin(branch_token, stop_tokens).any() or branch_pos >= max_tokens: break
-
-                token_context = branch_gen_tokens_text[:-1]
-                stop = should_stop_branch(branch_token_text, token_context, branch_metrics)
-                if stop:
-                    break
-                if branch_pos >= max_tokens:
-                    break
-        branches.append(
-            Branch(
-                tokens=branch_gen_tokens,
-                kvcache=branch_kvcache,
-                cur_pos=branch_pos,
-                tokens_text=branch_gen_tokens_text,
-                metrics=branch_gen_metrics,
-                sampler_states=branch_sampler_states,
-            )
-        )
-    return branches
-
-def eval_branches(branches, messages, response, model, sampler_cfg):
-    analysis_prompt_sys = (
-        "You are an expert evaluator assessing reasoning chains. "
-        "Here're several generated candidate branch completions below. "
-        "Please choose the most correct and relevant one for the conversation to continue with:\n\n"
-    )
-    analysis_prompt = ""
-    for m in messages:
-        if m.role == "user":
-            analysis_prompt += f"{m.role}: {m.content}\n"
-    analysis_prompt += "\n"
-
-    analysis_prompt += "Previously generated tokens:\n" + response + "\n\n"
-    for i, b in enumerate(branches):
-        completion_text = "".join(b.tokens_text)
-        analysis_prompt += f"branch {i}:\n{completion_text}\n\n"
-
-    analysis_prompt += "Which candidate branch number is the most relevant and cohere one to continue generatin with? Please think step by step then put your final answer in {branch }. For example: {branch 2}"
-
-    analysis_messages = [Message(role="system", content=analysis_prompt_sys), Message(role="user", content=analysis_prompt)]
-
-    print(analysis_messages)
-    if sampler_cfg.self_feedback:
-        decision = generate(
-                messages=analysis_messages,
-                model=model,
-                sampler_cfg=sampler_cfg,
-                max_tokens=500,
-                print_stream=True,
-                apply_chat_template=True,
-                allow_branching=False,  # Don't allow branching on self-feedback
-        )
-        decision_response = decision.response.strip()
-    else:
-        feedbacks = send_api_message(analysis_messages)
-        print(feedbacks)
-        decision_response = feedbacks.strip()
-
-    # Extract the content inside the {}
-    match = re.findall(r'\{(.*?)\}', decision_response)
-    if match:
-        answer_content = match[-1].strip()
-        number_match = re.search(r'\b(\d+)\b', answer_content)
-        if number_match:
-            chosen_index = int(number_match.group(1))
-        else:
-            print("Failed to find a number inside the {}. Defaulting to candidate 0.")
-            chosen_index = 0
-    else:
-        print("Failed to find {} in the response. Defaulting to candidate 0.")
-        chosen_index = 0
-
-    return chosen_index
-
-def score_branch(branches, messages, response, score_model):
-    branch_responses = []
-    for i, branch in enumerate(branches):
-        completion_text = "".join(branch.tokens_text)
-        branch_responses.append(f"branch {i}: {completion_text}")
-
-    samples = branch_responses
-    analysis_prompt = ""
-    for m in messages:
-        if m.role == "user":  
-            analysis_prompt += f"{m.role}: {m.content}\n"
-    analysis_prompt += "\n"
-
-    analysis_prompt += response
-
-    processed_sample = process_response(analysis_prompt, samples, score_model)
-    chosen_index = processed_sample["step_scores"].index(max(processed_sample["step_scores"]))
-
-    return chosen_index
 
 def get_openai_embeddings(
     texts: list[str], 
@@ -477,7 +326,8 @@ def _generate(
     feedback_provider: str = "PRM",
     random_select: bool = False,
     calculate_sim: bool = False,
-    do_insert: bool = False,
+    do_insert_bos: bool = False,
+    want_insert: bool = True,
     insert_text: str | None = None
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
 
@@ -576,16 +426,21 @@ def _generate(
 
             if track_pause and should_stop_branch(token_text, gen_tokens_text):
                 #print("pausing now")
-                # uncomment this to not insert anything
-                # sampler_state = SamplerState.ARGMAX
-                sampler_state = SamplerState.PAUSE
-                track_pause = False
+                # we are in a pause state
+                if not want_insert:
+                    sampler_state = SamplerState.ARGMAX
+                    track_pause = False
+                    #print("not inserting, continuing")
+                    continue
+                else:
+                    sampler_state = SamplerState.PAUSE
+                    track_pause = False
 
             # ──────────────────────────────────────────────────────────────────
             # CASE 1: SamplerState.ARGMAX (normal decoding)
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
-                if cur_pos == seqlen and do_insert:    
+                if cur_pos == seqlen and do_insert_bos:    
                     insert_count = 0
                     for token_text, metrics, state, _ in insert_tokens(
                         model,
@@ -605,7 +460,7 @@ def _generate(
                     #cur_pos += insert_count
                     #print("inserted", insert_count, "tokens")
 
-                if torch.isin(next_token, stop_tokens).any() and not track_end:
+                if torch.isin(next_token, stop_tokens).any() and not track_end and want_insert:
                     track_end = True
                     if print_stream:
                         rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
@@ -647,68 +502,7 @@ def _generate(
 
                     yield token_text, metrics, sampler_state, None
 
-            # ──────────────────────────────────────────────────────────────────
-            # CASE 2: SamplerState.BRANCHING
-            # ──────────────────────────────────────────────────────────────────
-            elif sampler_state == SamplerState.BRANCHING:
-                branches = _generate_branches(
-                    model, next_token, past_key_values, cur_pos,
-                    logits, metrics, stop_tokens, max_tokens,
-                    sampler_cfg, print_stream
-                )
-                gen_branches.append([branch.to_dict() for branch in branches])
-                branch_count += 1
-
-                if random_select:
-                    chosen_index = random.randint(0, 4)
-                else:
-                    if feedback_provider == "llama3.3":
-                        chosen_index = eval_branches(branches, messages, response, model, sampler_cfg)
-                    elif feedback_provider == "PRM":
-                        chosen_index = score_branch(branches, messages, response, score_model)
-                    else:
-                        raise ValueError("Invalid feedback_provider name. Must be 'llama3.3' or 'PRM'.")
-
-                best_branch = branches[chosen_index]
-                branch_choices.append(chosen_index)
-
-                branch_texts = ["".join(b.tokens_text) for b in branches]
-                if len(branches) > 1:
-                    embeddings = get_openai_embeddings(branch_texts, model_name="text-embedding-3-large")
-                    sim_matrix = pairwise_cosine_similarity(embeddings)
-                else:
-                    sim_matrix = np.array([[1.0]])
-                all_pairwise_similarities.append(sim_matrix.tolist())
-
-                # discard unchosen branches
-                for branch in branches:
-                    if branch != best_branch:
-                        del branch
-
-                next_token = best_branch.tokens[-1]
-                kvcache = best_branch.kvcache.to(device)
-                cur_pos = best_branch.cur_pos
-
-                gen_tokens = torch.cat(
-                    [gen_tokens, torch.tensor(best_branch.tokens, device=device).unsqueeze(0)],
-                    dim=1
-                )
-                gen_tokens_text.extend(best_branch.tokens_text)
-                gen_metrics.extend(best_branch.metrics)
-                sampler_states.extend(best_branch.sampler_states)
-                branch_response = "".join(best_branch.tokens_text)
-                response += branch_response
-
-                if print_stream:
-                    rprint(f"\n[{STATE_COLOR_MAP[SamplerState.BRANCHING]}]=>[/]", end='')
-                    for state, text in zip(best_branch.sampler_states, best_branch.tokens_text):
-                        rprint(f"[{STATE_COLOR_MAP[state]}]{text.replace('\n', '\\n')}[/]", end='')
-
-                if torch.isin(next_token, stop_tokens).any():
-                    break
-
-                yield token_text, metrics, sampler_state, None
-
+        
             # ──────────────────────────────────────────────────────────────────
             # CASE 3: SamplerState.PAUSE (we want to forcibly insert " oh wait")
             # ──────────────────────────────────────────────────────────────────
@@ -779,7 +573,8 @@ def generate(
     feedback_provider: str = "PRM",
     random_select: bool = False,
     calculate_sim: bool = False,
-    do_insert: bool = False,
+    do_insert_bos: bool = False,
+    want_insert: bool = True,
     insert_text: str = " oh wait"
 ):
     for token_text, metrics, sampler_state, gen in _generate(
@@ -794,7 +589,8 @@ def generate(
         feedback_provider=feedback_provider,
         random_select=random_select,
         calculate_sim=calculate_sim,
-        do_insert=do_insert,
+        do_insert_bos=do_insert_bos,
+        want_insert=want_insert,
         insert_text=insert_text
     ):
         if gen is not None:

@@ -14,23 +14,23 @@ messages = [
     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
 ]
 
-# messages = [
-#     {"role": "system", "content": "You are an expert financial analyst. "
-#     " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
-#     "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
-#     "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
-#     "Finally, indicate the correct answer: A, B, or C."},
-#     {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
-
-#     "A. [124.5; 135.5]. "
-#     "B. [125;135]. "
-#     "C. [130; 135.5]."},
-# ]
-
 messages = [
-    {"role": "system", "content": "You are a super intelligent assistant."},
-    {"role": "user", "content": "how many letter 'r' are there in the word 'strawberry'?"},
+    {"role": "system", "content": "You are an expert financial analyst. "
+    " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
+    "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
+    "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
+    "Finally, indicate the correct answer: A, B, or C."},
+    {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
+
+    "A. [124.5; 135.5]. "
+    "B. [125;135]. "
+    "C. [130; 135.5]."},
 ]
+
+# messages = [
+#     {"role": "system", "content": "You are a super intelligent assistant."},
+#     {"role": "user", "content": "how many letter 'r' are there in the word 'raspberry'?"},
+# ]
 
 thresholds = Thresholds(
     logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
@@ -57,7 +57,8 @@ model_name = "Qwen_3B"
 
 # Load the model and tokenizer
 base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto", torch_dtype="auto",
-                                                  quantization_config=quantization_config)
+                                                  quantization_config = quantization_config
+                                                  )
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 config = base_model.config
 
@@ -109,16 +110,16 @@ model = Model(base_model, config, tokenizer)
 # score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
 # score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to(local_rank).eval()
 
-# score_model = Model(None, score_model_params, score_tokenizer)
+score_model = Model(None, None, None)
  
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False,
-                     do_insert = False, insert_text= " Let's double check that.\n\n")
-                     #" <|im_start|>user \n"
-                     # " oh wait... <|im_end|> \n"
-                     #   " <|im_start|>assistant")
+gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False,
+                     do_insert_bos = False, want_insert=False, insert_text= 
+                    #  " <im_end> <|im_start|>user "
+                    #  "wait \n"
+                       "<|im_start|>assistant hmmm ")
 
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 
