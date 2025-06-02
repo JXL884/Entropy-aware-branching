@@ -198,6 +198,7 @@ def sample(
     can_branch: bool = False,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
     current_step: int = 0,
+    last_pause_step: int = -9999
 ) -> Tuple[torch.Tensor, SamplerState]:
     # Low Entropy, Low Varentropy
     # if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
@@ -210,14 +211,14 @@ def sample(
         and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high and current_step > 20
     ):
         # (A) Check if we're still on cooldown
-        if (current_step - cfg.last_pause_step) < cfg.cooldown_length:
+        if (current_step - last_pause_step) < cfg.cooldown_length:
             # Too soon since last PAUSE => skip pause
             sampler_state = SamplerState.ARGMAX
             sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
             return sampled_token, sampler_state
         else:
             # Allowed to pause
-            cfg.last_pause_step = current_step  # record we triggered pause now
+            last_pause_step = current_step  # record we triggered pause now
             sampler_state = SamplerState.PAUSE
             sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
             return sampled_token, sampler_state

@@ -14,6 +14,7 @@ from rich import print as rprint
 from openai import OpenAI
 import openai
 from typing import List
+from transformers import DynamicCache
 from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState, STATE_COLOR_MAP
 from entropix.kvcache import KVCache
 from entropix.sampler import sample
@@ -151,7 +152,7 @@ class GenerationData:
         return cls(**data)
 
 ################################################################################
-#                                 Branches                                     #
+#                                 Inserting                                    #
 ################################################################################
 
 @dataclass
@@ -172,7 +173,7 @@ class Branch:
         }
 
 def should_stop_branch(token_text, token_context):
-    BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", ":", "{", "}", "\n\n", ".\n\n", ":\n\n"}
+    BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", ":", "\n\n", ".\n\n", ":\n\n"}
 
     if token_text in BRANCH_STOP_TOKENS:
         if token_text == ".":
@@ -234,6 +235,44 @@ def pairwise_cosine_similarity(embeddings: list[list[float]]) -> np.ndarray:
     return sim_matrix
 
 
+def rollback_kv_cache_by_one_token(past_key_values):
+    """
+    Rolls back the KV cache by one token for each layer.
+    past_key_values is a transformers.Cache object, it returns a new Cache object.
+
+
+    Args:
+        past_key_values: The past_key_values from a model.
+                         Can be a transformers.Cache object, a tuple of 
+                         (key_tensor, value_tensor) pairs, or None.
+                         K and V tensors are expected to have the sequence length
+                         at dimension -2 (e.g., shape [batch, heads, seq_len, dim]).
+
+    Returns:
+        A new past_key_values with the last token's state removed
+    """
+
+    # Create a new cache object of the same type
+    new_cache = type(past_key_values)()
+    
+    # Roll back each layer
+    for layer_idx in range(len(past_key_values.key_cache)):
+        key_tensor = past_key_values.key_cache[layer_idx]
+        value_tensor = past_key_values.value_cache[layer_idx]
+        
+        if key_tensor is not None and value_tensor is not None:
+            # Remove the last token (sequence dimension is at -2)
+            if key_tensor.size(-2) > 0:  # Check if there are tokens to remove
+                rolled_back_key = key_tensor[..., :-1, :]
+                rolled_back_value = value_tensor[..., :-1, :]
+                
+                new_cache.update(rolled_back_key, rolled_back_value, layer_idx)
+            else:
+                # If no tokens to remove, keep empty tensors
+                new_cache.update(key_tensor, value_tensor, layer_idx)
+        
+    return new_cache
+
 def insert_tokens(
     model,
     next_token: torch.Tensor,
@@ -253,25 +292,15 @@ def insert_tokens(
     print_stream: bool,
     include_trigger_token: bool,
     insert_text: str
-):
-    if include_trigger_token:
-        # Append the triggering token (e.g., stop token if included)
-        gen_logits.append(logits)
-        gen_metrics.append(metrics)
-        sampler_states.append(SamplerState.ARGMAX)
-        cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
-        gen_tokens = torch.cat([gen_tokens, next_token], dim=1)
-        token_text = model.tokenizer.decode([next_token.item()])
-        gen_tokens_text.append(token_text)
-        response += token_text
-        if print_stream:
-            rprint(f"[{STATE_COLOR_MAP[SamplerState.ARGMAX]}]{token_text}[/]", end='')
-        yield token_text, metrics, SamplerState.ARGMAX, None
+) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
+
+    # 1) Roll back the past key values
+    past_key_values = rollback_kv_cache_by_one_token(past_key_values)
 
     # 2) Insert whatever
     insert_ids = model.tokenizer.encode(insert_text, add_special_tokens=False)
     for rid in insert_ids:
-        forced_token = torch.tensor([[rid]], device=device, dtype=torch.int32)
+        forced_token = torch.tensor([[rid]], device=device, dtype=torch.long)
         gen_tokens = torch.cat([gen_tokens, forced_token], dim=1)
 
         token_text = model.tokenizer.decode([rid])
@@ -297,22 +326,9 @@ def insert_tokens(
         gen_metrics.append(forced_metrics)
         sampler_states.append(SamplerState.PAUSE)
 
-        cur_pos += 1
+        last_token_id = rid
 
-        yield token_text, forced_metrics, SamplerState.PAUSE, None
-
-    # # 3) Sample a new next_token
-    # next_token, sampler_state = sample(
-    #     forced_logits,
-    #     forced_scores,
-    #     forced_metrics,
-    #     sampler_cfg,
-    #     can_branch=allow_branching and cur_pos >= seqlen,
-    #     current_step=cur_pos
-    # )
-    # token_text = model.tokenizer.decode([next_token.item()])
-    # # 4) Yield the last inserted token
-    # yield token_text, forced_metrics, SamplerState.PAUSE, None
+        yield token_text, forced_metrics, SamplerState.PAUSE, past_key_values, last_token_id
 
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
@@ -330,21 +346,10 @@ def _generate(
     want_insert: bool = True,
     insert_text: str | None = None
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
-
-    # (A) Initialize the "oh wait" cooldown
-    cooldown_length = 20          # minimum number of tokens between "oh wait" insertions
-    last_oh_wait_step = -9999     # track when we last inserted "oh wait"
-
-    # # If the tokenizer has 'stop_token_ids', use them
-    # if hasattr(model.tokenizer, "stop_token_ids"):
-    #     stop_ids = model.tokenizer.stop_token_ids
-    # elif (hasattr(model.tokenizer, "eos_token_id") 
-    #       and model.tokenizer.eos_token_id is not None):
-    #     stop_ids = [model.tokenizer.eos_token_id]
-    # else:
+    
     stop_ids = [151645]  # Qwen's <|endoftext|> ID
 
-    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.int32)
+    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.long)
     if max_tokens is None or max_tokens > model.params.max_position_embeddings:
         max_tokens = model.params.max_position_embeddings
     if sampler_cfg is None:
@@ -376,10 +381,11 @@ def _generate(
     with torch.inference_mode():
         tokens = torch.tensor([prompt], dtype=torch.long).to(device)
         bs, seqlen = tokens.shape
-        cur_pos = seqlen
 
         next_token = tokens
-        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
+        gen_tokens = torch.zeros(1, 1, dtype=torch.long, device=device)
+        last_pause_step = -9999
+        cur_seen_tokens = 0
         past_key_values = None
         response = ""
         gen_tokens_text = []
@@ -393,8 +399,7 @@ def _generate(
         track_pause = False
         track_end = False
 
-        while cur_pos < max_tokens:
-            #print("cur_pos", cur_pos)
+        while cur_seen_tokens < max_tokens:
             outputs = model.weights(
                 input_ids=next_token,
                 past_key_values=past_key_values,
@@ -405,6 +410,7 @@ def _generate(
 
             logits = outputs.logits
             past_key_values = outputs.past_key_values
+            cur_seen_tokens = past_key_values.seen_tokens
             scores = outputs.attentions[-1]
 
             metrics = calculate_metrics(logits, scores)
@@ -414,8 +420,9 @@ def _generate(
                 scores,  
                 metrics,
                 sampler_cfg,
-                can_branch=allow_branching and cur_pos >= seqlen,
-                current_step=num_tokens_so_far  # new parameter to track the current step
+                can_branch=allow_branching and past_key_values.seen_tokens >= seqlen,
+                current_step=past_key_values.seen_tokens,  # new parameter to track the current step
+                last_pause_step=last_pause_step
             )
             token_text = model.tokenizer.decode([next_token.item()])
             if sampler_state == SamplerState.PAUSE:
@@ -434,18 +441,18 @@ def _generate(
                     continue
                 else:
                     sampler_state = SamplerState.PAUSE
+                    last_pause_step = past_key_values.seen_tokens
                     track_pause = False
 
             # ──────────────────────────────────────────────────────────────────
             # CASE 1: SamplerState.ARGMAX (normal decoding)
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
-                if cur_pos == seqlen and do_insert_bos:    
+                if past_key_values.seen_tokens == seqlen and do_insert_bos:    
                     insert_count = 0
-                    for token_text, metrics, state, _ in insert_tokens(
-                        model,
-                        next_token, past_key_values, logits, metrics,
-                        cur_pos, seqlen, gen_tokens, gen_tokens_text,
+                    for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
+                        model, next_token, past_key_values, logits, metrics,
+                        past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
                         response, gen_logits, gen_metrics, sampler_states,
                         sampler_cfg, allow_branching, print_stream,
                         include_trigger_token=False,
@@ -453,22 +460,20 @@ def _generate(
                     ):
                         yield token_text, metrics, state, None
                         insert_count += 1
-                        last_yielded = token_text
-                    # After insertion, decode the last token to set next_token
-                    if last_yielded:
-                        next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
-                    #cur_pos += insert_count
-                    #print("inserted", insert_count, "tokens")
+                        # Update KV cache from the generator
+                        past_key_values = new_past_kv
+                        if last_token_id is not None:
+                            next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
 
                 if torch.isin(next_token, stop_tokens).any() and not track_end and want_insert:
                     track_end = True
                     if print_stream:
                         rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
+                    
                     insert_count = 0
-                    for token_text, metrics, state, _ in insert_tokens(
-                        model,
-                        next_token, past_key_values, logits, metrics,
-                        cur_pos, seqlen, gen_tokens, gen_tokens_text,
+                    for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
+                        model, next_token, past_key_values, logits, metrics,
+                        past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
                         response, gen_logits, gen_metrics, sampler_states,
                         sampler_cfg, allow_branching, print_stream,
                         include_trigger_token=False,
@@ -476,17 +481,15 @@ def _generate(
                     ):
                         yield token_text, metrics, state, None
                         insert_count += 1
-                        last_yielded = token_text
-                    if last_yielded:
-                        next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
-                    #cur_pos += insert_count
+                        # Update KV cache from the generator
+                        past_key_values = new_past_kv
+                        if last_token_id is not None:
+                            next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
                 else:
+                    # Normal token processing
                     gen_logits.append(logits)
                     gen_metrics.append(metrics)
                     sampler_states.append(sampler_state)
-
-                    # Move cur_pos forward (first step => from 0 to seqlen, else increment)
-                    cur_pos = seqlen if cur_pos < seqlen else cur_pos + 1
 
                     gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
                     token_text = model.tokenizer.decode([next_token.item()])
@@ -504,26 +507,24 @@ def _generate(
 
         
             # ──────────────────────────────────────────────────────────────────
-            # CASE 3: SamplerState.PAUSE (we want to forcibly insert " oh wait")
+            # CASE 2: SamplerState.PAUSE (we want to forcibly insert " oh wait")
             # ──────────────────────────────────────────────────────────────────
             elif sampler_state == SamplerState.PAUSE:
                 insert_count = 0
-                for token_text, metrics, state, _ in insert_tokens(
-                    model,
-                    next_token, past_key_values, logits, metrics,
-                    cur_pos, seqlen, gen_tokens, gen_tokens_text,
+                for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
+                    model, next_token, past_key_values, logits, metrics,
+                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
                     response, gen_logits, gen_metrics, sampler_states,
                     sampler_cfg, allow_branching, print_stream,
-                    include_trigger_token=True,
+                    include_trigger_token=False,
                     insert_text=insert_text
                 ):
                     yield token_text, metrics, state, None
                     insert_count += 1
-                    last_yielded = token_text
-                # After insertion, decode the last token to set next_token
-                if last_yielded:
-                    next_token = torch.tensor([[model.tokenizer.encode(last_yielded)[-1]]], device=device, dtype=torch.int32)
-                #cur_pos += insert_count
+                    # Update KV cache from the generator
+                    past_key_values = new_past_kv
+                    if last_token_id is not None:
+                        next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
 
         # Build final GenerationData if you want
         messages.append(Message(role="assistant", content=response))

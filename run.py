@@ -9,10 +9,10 @@ from accelerate import Accelerator
 import torch
 from typing import *
 
-messages = [
-    {"role": "system", "content": "You are a super intelligent assistant."},
-    {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
-]
+# messages = [
+#     {"role": "system", "content": "You are a super intelligent assistant."},
+#     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
+# ]
 
 messages = [
     {"role": "system", "content": "You are an expert financial analyst. "
@@ -34,7 +34,7 @@ messages = [
 
 thresholds = Thresholds(
     logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=4)
+    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=3.5)
 )
 
 branching = Branching(num_samples = 5)
@@ -115,11 +115,10 @@ score_model = Model(None, None, None)
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= False, random_select = False,
-                     do_insert_bos = False, want_insert=False, insert_text= 
-                    #  " <im_end> <|im_start|>user "
-                    #  "wait \n"
-                       "<|im_start|>assistant hmmm ")
+gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= True, random_select = False,
+                     do_insert_bos = False, want_insert=True, insert_text= 
+                      # "<|im_end|>\n<|im_start|>user\n oh wait... <|im_end|>\n<|im_start|>assistant\n ")
+                      " oh wait... let me think... ")
 
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 

@@ -106,9 +106,9 @@ class Branching(BaseModel):
 
 # Main SamplerConfig Model
 class SamplerConfig(BaseModel):
-    temperature: float = 0.666
-    top_p: float = 0.90
-    top_k: int = 27
+    temperature: float = 0.7
+    top_p: float = 0.80
+    top_k: int = 20
     min_p: float = 0.03
     thresholds: Thresholds = Thresholds()
     adaptive: Adaptive = Adaptive()
@@ -116,8 +116,7 @@ class SamplerConfig(BaseModel):
     coefficients: Coefficients = Coefficients()
     branching: Branching = Branching()
     self_feedback: bool = False
-    cooldown_length: int = 30
-    last_pause_step: int = -9999
+    cooldown_length: int = 20
 
     @model_validator(mode='before')
     def validate_nested_models(cls, values):
