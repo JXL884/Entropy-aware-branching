@@ -218,12 +218,11 @@ def sample(
             return sampled_token, sampler_state
         else:
             # Allowed to pause
-            last_pause_step = current_step  # record we triggered pause now
             sampler_state = SamplerState.PAUSE
             sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
             return sampled_token, sampler_state
-
-    # Otherwise, normal flow => Argmax or other sampling
-    sampler_state = SamplerState.ARGMAX
-    sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
-    return sampled_token, sampler_state
+    else:
+        # Otherwise, normal flow => Argmax or other sampling
+        sampler_state = SamplerState.ARGMAX
+        sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+        return sampled_token, sampler_state

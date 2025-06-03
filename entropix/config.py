@@ -116,7 +116,7 @@ class SamplerConfig(BaseModel):
     coefficients: Coefficients = Coefficients()
     branching: Branching = Branching()
     self_feedback: bool = False
-    cooldown_length: int = 20
+    cooldown_length: int = 30
 
     @model_validator(mode='before')
     def validate_nested_models(cls, values):

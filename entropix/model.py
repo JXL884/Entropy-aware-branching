@@ -510,6 +510,19 @@ def _generate(
             # CASE 2: SamplerState.PAUSE (we want to forcibly insert " oh wait")
             # ──────────────────────────────────────────────────────────────────
             elif sampler_state == SamplerState.PAUSE:
+                gen_logits.append(logits)
+                gen_metrics.append(metrics)
+                sampler_states.append(sampler_state)
+
+                gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
+                token_text = model.tokenizer.decode([next_token.item()])
+                gen_tokens_text.append(token_text)
+                response += token_text
+
+                if print_stream:
+                    rprint(f"[{STATE_COLOR_MAP[SamplerState.ARGMAX]}]{token_text}[/]", end='')
+                yield token_text, metrics, sampler_state, None
+                
                 insert_count = 0
                 for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
                     model, next_token, past_key_values, logits, metrics,
