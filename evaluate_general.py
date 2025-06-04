@@ -8,7 +8,7 @@ import os
 import glob, re
 from datasets import load_dataset
 
-MY_API_KEYS = "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"
+MY_API_KEYS = ""
 
 # if os.getenv("OPENROUTER_API_KEY") is None:
 #     # read .env file into runtime environment variables
