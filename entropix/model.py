@@ -526,6 +526,9 @@ def _generate(
                 if print_stream:
                     rprint(f"[{STATE_COLOR_MAP[SamplerState.ARGMAX]}]{token_text}[/]", end='')
                 yield token_text, metrics, sampler_state, None
+
+                sampler_cfg.thresholds.logit_entropy.high = sampler_cfg.thresholds.logit_entropy.high + 0.2
+                sampler_cfg.thresholds.logit_varentropy.high = sampler_cfg.thresholds.logit_varentropy.high + 0.2
                 
                 insert_count = 0
                 for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(

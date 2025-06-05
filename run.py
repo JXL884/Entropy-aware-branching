@@ -33,8 +33,8 @@ messages = [
 # ]
 
 thresholds = Thresholds(
-    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2.5),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=3.5)
+    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
+    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=3)
 )
 
 branching = Branching(num_samples = 5)
