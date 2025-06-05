@@ -174,6 +174,7 @@ class Branch:
 
 def should_stop_branch(token_text, token_context):
     BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", ":", "\n\n", ".\n\n", ":\n\n"}
+    # BRANCH_STOP_TOKENS = {"\n\n"}
 
     if token_text in BRANCH_STOP_TOKENS:
         if token_text == ".":
@@ -293,9 +294,11 @@ def insert_tokens(
     include_trigger_token: bool,
     insert_text: str
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
-
+    stop_ids = [151645]
+    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.long)
     # 1) Roll back the past key values
-    past_key_values = rollback_kv_cache_by_one_token(past_key_values)
+    if not torch.isin(next_token, stop_tokens).any():
+        past_key_values = rollback_kv_cache_by_one_token(past_key_values)
 
     # 2) Insert whatever
     insert_ids = model.tokenizer.encode(insert_text, add_special_tokens=False)
@@ -344,6 +347,7 @@ def _generate(
     calculate_sim: bool = False,
     do_insert_bos: bool = False,
     want_insert: bool = True,
+    enable_thinking: bool = False,
     insert_text: str | None = None
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     
@@ -367,7 +371,7 @@ def _generate(
     messages: list[Message] = messages  # type: ignore
     if apply_chat_template:
         print("The prompt is", messages)
-        prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+        prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, enable_thinking=enable_thinking)
         print(prompt)
 
     if print_stream:
@@ -589,6 +593,7 @@ def generate(
     calculate_sim: bool = False,
     do_insert_bos: bool = False,
     want_insert: bool = True,
+    enable_thinking: bool = False,
     insert_text: str = " oh wait"
 ):
     for token_text, metrics, sampler_state, gen in _generate(
@@ -605,6 +610,7 @@ def generate(
         calculate_sim=calculate_sim,
         do_insert_bos=do_insert_bos,
         want_insert=want_insert,
+        enable_thinking=enable_thinking,
         insert_text=insert_text
     ):
         if gen is not None:

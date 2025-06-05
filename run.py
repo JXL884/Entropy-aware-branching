@@ -33,7 +33,7 @@ messages = [
 # ]
 
 thresholds = Thresholds(
-    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
+    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2.5),
     logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=3.5)
 )
 
@@ -52,8 +52,8 @@ quantization_config = BitsAndBytesConfig(
 )
 
 # MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
-model_name = "Qwen_3B"
+MODEL_NAME = "Qwen/Qwen3-8B"
+model_name = "Qwen3-8B"
 
 # Load the model and tokenizer
 base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto", torch_dtype="auto",
@@ -63,27 +63,63 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 config = base_model.config
 
 config_overrides = {
-"Qwen_1B": {
+"Qwen2.5_1B": {
     "head_dim": 128,
     "use_scaled_rope": False,
     "n_layers": 28,
     "n_local_kv_heads": 2,
     "n_local_heads": 12
 },
-"Qwen_3B": {
+"Qwen2.5_3B": {
     "head_dim": 128,
     "use_scaled_rope": False,
     "n_layers": 36,
     "n_local_kv_heads": 2,
     "n_local_heads": 16
 },
-"Qwen_7B": {
+"Qwen2.5_7B": {
     "head_dim": 128,
     "use_scaled_rope": False,
     "n_layers": 28,
     "n_local_kv_heads": 4,
     "n_local_heads": 28
-}}
+},
+"deepseek": {
+    "head_dim": 128,
+    "use_scaled_rope": True,
+    "n_layers": 36,
+    "n_local_kv_heads": 8,
+    "n_local_heads": 32
+},
+"Qwen3-1.7B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 28,
+    "n_local_kv_heads": 8,
+    "n_local_heads": 16
+},
+"Qwen3-8B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 36,
+    "n_local_kv_heads": 8,
+    "n_local_heads": 32
+},
+"Qwen3-14B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 40,
+    "n_local_kv_heads": 8,
+    "n_local_heads": 40
+},
+"Qwen3-32B": {
+    "head_dim": 128,
+    "use_scaled_rope": False,
+    "n_layers": 64,
+    "n_local_kv_heads": 8,
+    "n_local_heads": 64
+}
+}
 
 # Function to apply config overrides
 def apply_config_overrides(model, config_name, config_overrides):
@@ -106,20 +142,19 @@ model = Model(base_model, config, tokenizer)
 # PRM model, COMMENT OUT FOR NOW!!!!!!!!!!!!!!!!!!!!!!    
 # score_model_name = 'RLHFlow/Llama3.1-8B-PRM-Deepseek-Data'
 # accelerator = Accelerator()
-# local_rank = accelerator.local_process_index
 # score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
-# score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to(local_rank).eval()
+# score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to("cuda").eval()
 
 score_model = Model(None, None, None)
  
 print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="llama3.3", print_stream=True, allow_branching= True, random_select = False,
-                     do_insert_bos = False, want_insert=True, insert_text= 
+gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="PRM", print_stream=True, allow_branching= True, random_select = False,
+                     do_insert_bos = False, want_insert=True, enable_thinking=True, insert_text= 
                       # "<|im_end|>\n<|im_start|>user\n oh wait... <|im_end|>\n<|im_start|>assistant\n ")
-                      " oh wait... let me think... ")
-
+                      # " <|im_end|>\n<|im_start|>user\n my bad, let me review my previous step. <|im_end|>\n<|im_start|>assistant\n ")
+                      " wait ")
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 
 print()
