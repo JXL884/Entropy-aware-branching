@@ -208,7 +208,7 @@ def sample(
 
     if can_branch and (
         metrics.logit_entropy > cfg.thresholds.logit_entropy.high
-        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high and current_step > 20
+        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high and current_step > 30
     ):
         # (A) Check if we're still on cooldown
         if (current_step - last_pause_step) < cfg.cooldown_length:
