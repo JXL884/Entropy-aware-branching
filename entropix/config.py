@@ -106,8 +106,8 @@ class Branching(BaseModel):
 
 # Main SamplerConfig Model
 class SamplerConfig(BaseModel):
-    temperature: float = 0.7
-    top_p: float = 0.80
+    temperature: float = 0.6
+    top_p: float = 0.95
     top_k: int = 20
     min_p: float = 0.03
     thresholds: Thresholds = Thresholds()

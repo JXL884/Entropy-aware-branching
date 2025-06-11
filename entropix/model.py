@@ -173,7 +173,7 @@ class Branch:
         }
 
 def should_stop_branch(token_text, token_context):
-    BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", ":", "\n\n", ".\n\n", ":\n\n"}
+    BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", "\n\n", ".\n\n"}
     # BRANCH_STOP_TOKENS = {"\n\n"}
 
     if token_text in BRANCH_STOP_TOKENS:
@@ -295,43 +295,45 @@ def insert_tokens(
     insert_text: str
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
     stop_ids = [151645]
-    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.long)
-    # 1) Roll back the past key values
-    if not torch.isin(next_token, stop_tokens).any():
-        past_key_values = rollback_kv_cache_by_one_token(past_key_values)
+    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.int32)
 
-    # 2) Insert whatever
+    new_tokens_ids = []
+    new_tokens_text = []
+    new_metrics = []
+    current_past_kv = past_key_values
+
+    # Correctly encode the text snippet.
+    # insert_ids = model.tokenizer.apply_chat_template(insert_text, add_generation_prompt=True, tokenize=True, enable_thinking=True)
     insert_ids = model.tokenizer.encode(insert_text, add_special_tokens=False)
-    for rid in insert_ids:
-        forced_token = torch.tensor([[rid]], device=device, dtype=torch.long)
-        gen_tokens = torch.cat([gen_tokens, forced_token], dim=1)
 
+    for rid in insert_ids:
+        new_tokens_ids.append(rid)
+        forced_token = torch.tensor([[rid]], device=device, dtype=torch.int32)
+        
+        with torch.inference_mode():
+            forced_outputs = model.weights(
+                input_ids=forced_token,
+                past_key_values=current_past_kv,
+                use_cache=True,
+                output_attentions=True
+            )
+        
+        # Update the state for the next iteration of *this* loop
+        current_past_kv = forced_outputs.past_key_values
+        
+        # Log the results
         token_text = model.tokenizer.decode([rid])
-        gen_tokens_text.append(token_text)
-        response += token_text
+        new_tokens_text.append(token_text)
+        
+        forced_logits = forced_outputs.logits
+        forced_scores = forced_outputs.attentions[-1]
+        forced_metrics = calculate_metrics(forced_logits, forced_scores)
+        new_metrics.append(forced_metrics)
 
         if print_stream:
             rprint(f"[{STATE_COLOR_MAP[SamplerState.PAUSE]}]{token_text}[/]", end='')
 
-        with torch.inference_mode():
-            forced_outputs = model.weights(
-                input_ids=forced_token,
-                past_key_values=past_key_values,
-                use_cache=True,
-                output_attentions=True
-            )
-
-        past_key_values = forced_outputs.past_key_values
-        forced_logits = forced_outputs.logits
-        forced_scores = forced_outputs.attentions[-1]
-        forced_metrics = calculate_metrics(forced_logits, forced_scores)
-        gen_logits.append(forced_logits)
-        gen_metrics.append(forced_metrics)
-        sampler_states.append(SamplerState.PAUSE)
-
-        last_token_id = rid
-
-        yield token_text, forced_metrics, SamplerState.PAUSE, past_key_values, last_token_id
+    return new_tokens_ids, new_tokens_text, new_metrics, current_past_kv
 
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
@@ -353,7 +355,7 @@ def _generate(
     
     stop_ids = [151645]  # Qwen's <|endoftext|> ID
 
-    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.long)
+    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.int32)
     if max_tokens is None or max_tokens > model.params.max_position_embeddings:
         max_tokens = model.params.max_position_embeddings
     if sampler_cfg is None:
@@ -372,7 +374,8 @@ def _generate(
     if apply_chat_template:
         print("The prompt is", messages)
         prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, enable_thinking=enable_thinking)
-        print(prompt)
+        prompt_for_print = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, enable_thinking=enable_thinking)
+        print(prompt_for_print)
 
     if print_stream:
         print()
@@ -383,11 +386,11 @@ def _generate(
     #print("The prompt is", prompt)
 
     with torch.inference_mode():
-        tokens = torch.tensor([prompt], dtype=torch.long).to(device)
+        tokens = torch.tensor([prompt], dtype=torch.int32).to(device)
         bs, seqlen = tokens.shape
 
         next_token = tokens
-        gen_tokens = torch.zeros(1, 1, dtype=torch.long, device=device)
+        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
         last_pause_step = -9999
         cur_seen_tokens = 0
         past_key_values = None
@@ -453,42 +456,66 @@ def _generate(
             # ──────────────────────────────────────────────────────────────────
             if sampler_state == SamplerState.ARGMAX:
                 if past_key_values.seen_tokens == seqlen and do_insert_bos:    
-                    insert_count = 0
-                    for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
-                        model, next_token, past_key_values, logits, metrics,
-                        past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                        response, gen_logits, gen_metrics, sampler_states,
-                        sampler_cfg, allow_branching, print_stream,
-                        include_trigger_token=False,
-                        insert_text=insert_text
-                    ):
-                        yield token_text, metrics, state, None
-                        insert_count += 1
-                        # Update KV cache from the generator
-                        past_key_values = new_past_kv
-                        if last_token_id is not None:
-                            next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
+                    # 2. Roll back the KV cache to the state *before* the trigger token.
+                    rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
 
-                if torch.isin(next_token, stop_tokens).any() and not track_end and want_insert:
+                    # 3. Call our clean insertion function.
+                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
+                    model, next_token, past_key_values, logits, metrics,
+                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
+                    response, gen_logits, gen_metrics, sampler_states,
+                    sampler_cfg, allow_branching, print_stream,
+                    include_trigger_token=False,
+                    insert_text=insert_text
+                    )
+
+                    response += "".join(inserted_text)
+                    gen_tokens_text.extend(inserted_text)
+                    gen_metrics.extend(inserted_metrics)
+
+                    new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
+                    gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
+                    sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
+                    past_key_values = new_past_kv
+
+                    if inserted_ids:
+                        last_inserted_id = inserted_ids[-1]
+                        next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
+
+                if torch.isin(next_token, stop_tokens).any() and not track_end and do_insert_eos:
                     track_end = True
-                    if print_stream:
-                        rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
                     
-                    insert_count = 0
-                    for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
-                        model, next_token, past_key_values, logits, metrics,
-                        past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                        response, gen_logits, gen_metrics, sampler_states,
-                        sampler_cfg, allow_branching, print_stream,
-                        include_trigger_token=False,
-                        insert_text=insert_text
-                    ):
-                        yield token_text, metrics, state, None
-                        insert_count += 1
-                        # Update KV cache from the generator
-                        past_key_values = new_past_kv
-                        if last_token_id is not None:
-                            next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
+                    # phrase = "Final Answer: **A. [124.5; 135.5]**"
+                    # phrase_ids = model.tokenizer.encode(phrase, add_special_tokens=False)
+                    # 2. Roll back the KV cache to the state *before* the trigger token.
+                    # for i in phrase_ids:
+                    #     rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
+                    #     past_key_values = rolled_back_kv
+
+                    past_key_values = rollback_kv_cache_by_one_token(past_key_values)
+
+                    # 3. Call our clean insertion function.
+                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
+                    model, next_token, past_key_values, logits, metrics,
+                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
+                    response, gen_logits, gen_metrics, sampler_states,
+                    sampler_cfg, allow_branching, print_stream,
+                    include_trigger_token=False,
+                    insert_text=insert_text
+                    )
+
+                    response += "".join(inserted_text)
+                    gen_tokens_text.extend(inserted_text)
+                    gen_metrics.extend(inserted_metrics)
+
+                    new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
+                    gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
+                    sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
+                    past_key_values = new_past_kv
+
+                    if inserted_ids:
+                        last_inserted_id = inserted_ids[-1]
+                        next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
                 else:
                     # Normal token processing
                     gen_logits.append(logits)
@@ -514,34 +541,45 @@ def _generate(
             # CASE 2: SamplerState.PAUSE (we want to forcibly insert " oh wait")
             # ──────────────────────────────────────────────────────────────────
             elif sampler_state == SamplerState.PAUSE:
+                # 1. A PAUSE has been triggered by `next_token`.
+                #    DO NOT add this trigger token to our response history yet.
+                #    Log its metrics, as it was a valid generation step.
                 gen_logits.append(logits)
                 gen_metrics.append(metrics)
                 sampler_states.append(sampler_state)
 
-                gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-                token_text = model.tokenizer.decode([next_token.item()])
-                gen_tokens_text.append(token_text)
-                response += token_text
+                sampler_cfg.thresholds.logit_entropy.high = sampler_cfg.thresholds.logit_entropy.high + 0.5
+                sampler_cfg.thresholds.logit_varentropy.high = sampler_cfg.thresholds.logit_varentropy.high + 0.5
 
                 if print_stream:
-                    rprint(f"[{STATE_COLOR_MAP[SamplerState.ARGMAX]}]{token_text}[/]", end='')
-                yield token_text, metrics, sampler_state, None
-                
-                insert_count = 0
-                for token_text, metrics, state, new_past_kv, last_token_id in insert_tokens(
-                    model, next_token, past_key_values, logits, metrics,
-                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                    response, gen_logits, gen_metrics, sampler_states,
-                    sampler_cfg, allow_branching, print_stream,
-                    include_trigger_token=False,
-                    insert_text=insert_text
-                ):
-                    yield token_text, metrics, state, None
-                    insert_count += 1
-                    # Update KV cache from the generator
-                    past_key_values = new_past_kv
-                    if last_token_id is not None:
-                        next_token = torch.tensor([[last_token_id]], device=device, dtype=torch.long)
+                    # Visually show the user the trigger token was caught, but don't save it.
+                    rprint(f"({token_text})", end='')
+
+                # 2. Roll back the KV cache to the state *before* the trigger token.
+                rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
+
+                # 3. Call our clean insertion function.
+                inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
+                model, next_token, past_key_values, logits, metrics,
+                past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
+                response, gen_logits, gen_metrics, sampler_states,
+                sampler_cfg, allow_branching, print_stream,
+                include_trigger_token=False,
+                insert_text=insert_text
+                )
+
+                response += "".join(inserted_text)
+                gen_tokens_text.extend(inserted_text)
+                gen_metrics.extend(inserted_metrics)
+
+                new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
+                gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
+                sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
+                past_key_values = new_past_kv
+
+                if inserted_ids:
+                    last_inserted_id = inserted_ids[-1]
+                    next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
 
         # Build final GenerationData if you want
         messages.append(Message(role="assistant", content=response))

@@ -9,22 +9,55 @@ from accelerate import Accelerator
 import torch
 from typing import *
 
-# messages = [
-#     {"role": "system", "content": "You are a super intelligent assistant."},
-#     {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
-# ]
+messages = [
+    {"role": "system", "content": "You are a super intelligent assistant."},
+    {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
+]
 
 messages = [
-    {"role": "system", "content": "You are an expert financial analyst. "
-    " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
-    "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
-    "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
-    "Finally, indicate the correct answer: A, B, or C."},
+    # {"role": "system", "content": "You are an expert financial analyst. "
+    # " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
+    # "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
+    # "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
+    # "Finally, indicate the correct answer: A, B, or C."},
+    {"role": "system", "content": "You are a collaborative AI expert. You are given a conversation history where the last assistant message is an incomplete, step-by-step solution. "
+    "Your task is to reflect on the previous solution and continue the solution by generating the next logical step. Do not overthink "
+    "1.  **Analyze and Verify:** "
+    "   *   Read the entire conversation to understand the user's goal and the solution's progress. "
+    "   *   Critically evaluate the last step taken by the assistant. Is the formula correct? Is the reasoning sound? "
+    "   *   Identify the exact point where the assistant left off. "
+    "2.  **Plan the Next Step:** "
+    "   *   Based on your analysis, determine the immediate next action required to solve the problem. "
+    "   *   For example, if the last step was defining a formula, the next step is likely plugging in the values. If the last step was a calculation, the next step might be interpreting that result or performing the next calculation in the sequence. "
+"},
     {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
-
     "A. [124.5; 135.5]. "
     "B. [125;135]. "
     "C. [130; 135.5]."},
+    {"role": "assistant", "content": "To solve this question, we need to compute the **95% confidence interval (CI)** for the **mean IQ** of CFA exam candidates, given the following:
+    "- Sample size: $ n = 50 $"
+    "- Sample mean: $ [/]bar{x} = 130 $"
+    "- Population standard deviation: $ [/]sigma = 20 $"
+    "- IQs are assumed to follow a **normal distribution**"
+    "---"
+    "### Step 1: Understand the Confidence Interval FormulaFor a **normal distribution** with **known population standard deviation**, the **confidence interval for the population mean** is given by:
+    "$$"
+    "[/]bar{x} [/]pm z^* [/]cdot [/]frac{[/]sigma}{[/]sqrt{n}}"
+    "$$"
+    "Where:"
+    "- $ [/]bar{x} $ is the sample mean"
+    "- $ z^* $ is the **critical value** from the standard normal distribution corresponding to the desired confidence level"
+    "- $ [/]sigma $ is the population standard deviation"
+    "- $ n $ is the sample size"
+    "---"
+    "### Step 2: Identify the Critical Value"
+    "For a **95% confidence interval**, the **z-score** that corresponds to the middle 95% of the standard normal distribution is:"
+    "$$"
+    "z^* = 1.96"
+    "$$"
+    "---"
+    "### Step 3: Compute the Standard Error"},
+    {"role": "user", "content": " /think"},
 ]
 
 # messages = [
@@ -33,8 +66,8 @@ messages = [
 # ]
 
 thresholds = Thresholds(
-    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2.5),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=3.5)
+    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=2),
+    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=2.5)
 )
 
 branching = Branching(num_samples = 5)
@@ -151,10 +184,12 @@ print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
 gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="PRM", print_stream=True, allow_branching= True, random_select = False,
-                     do_insert_bos = False, want_insert=True, enable_thinking=True, insert_text= 
+                     do_insert_bos = False, do_insert_eos = False, want_insert=False, enable_thinking=True, insert_text= 
                       # "<|im_end|>\n<|im_start|>user\n oh wait... <|im_end|>\n<|im_start|>assistant\n ")
                       # " <|im_end|>\n<|im_start|>user\n my bad, let me review my previous step. <|im_end|>\n<|im_start|>assistant\n ")
-                      " wait ")
+                      #[{"role": "user", "content": "let me reflect on my previous solution."}])
+                       "Final Answer: **B. [125; 135]**<|im_end|>\n<|im_start|>user\nplease reflect on your previous solution. /think<|im_end|>\n<|im_start|>assistant\n")
+                      #"Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 
 print()
