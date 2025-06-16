@@ -629,8 +629,8 @@ def _generate(
                 gen_metrics.append(metrics)
                 sampler_states.append(sampler_state)
 
-                # sampler_cfg.thresholds.logit_entropy.high = sampler_cfg.thresholds.logit_entropy.high + 0.5
-                # sampler_cfg.thresholds.logit_varentropy.high = sampler_cfg.thresholds.logit_varentropy.high + 0.5
+                sampler_cfg.thresholds.logit_entropy.high = sampler_cfg.thresholds.logit_entropy.high + 0.2
+                sampler_cfg.thresholds.logit_varentropy.high = sampler_cfg.thresholds.logit_varentropy.high + 0.2
 
                 if print_stream:
                     # Visually show the user the trigger token was caught, but don't save it.
