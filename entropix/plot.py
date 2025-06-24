@@ -13,6 +13,8 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
     tokens = generation_data.tokens
     entropies = np.array([token_metrics.logit_entropy for token_metrics in generation_data.metrics])
     varentropies = np.array([token_metrics.logit_varentropy for token_metrics in generation_data.metrics])
+    attn_entropies = np.array([token_metrics.attn_entropy for token_metrics in generation_data.metrics])
+    attn_varentropies = np.array([token_metrics.attn_varentropy for token_metrics in generation_data.metrics])
     sampler_states = generation_data.sampler_states
 
     thresholds = [
@@ -40,6 +42,8 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
     # Main traces
     fig.add_trace(go.Scatter(name='Entropy', line=dict(color='blue'), x=list(range(len(entropies))), y=entropies, yaxis='y1'))
     fig.add_trace(go.Scatter(name='Varentropy', line=dict(color='red'), x=list(range(len(varentropies))), y=varentropies, yaxis='y1'))
+    fig.add_trace(go.Scatter(name='Attn Entropy', line=dict(color='green'), x=list(range(len(attn_entropies))), y=attn_entropies, yaxis='y1', visible='legendonly'))
+    fig.add_trace(go.Scatter(name='Attn Varentropy', line=dict(color='purple'), x=list(range(len(attn_varentropies))), y=attn_varentropies, yaxis='y1', visible='legendonly'))
 
     # Sampler states
     state_colors = [STATE_COLOR_MAP[state] for state in sampler_states]

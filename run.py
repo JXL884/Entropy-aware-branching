@@ -1,165 +1,97 @@
-from entropix.config import SamplerConfig, Thresholds, ThresholdLevel, Branching
-from entropix.model import generate, Model
-from entropix.tokenizer import Tokenizer
-from transformers import AutoTokenizer, Qwen2ForCausalLM
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-from entropix.plot import plot3d, plot2d
-from transformers import AutoTokenizer
-from accelerate import Accelerator
 import torch
-from typing import *
-
-messages = [
-    {"role": "system", "content": "You are a super intelligent assistant."},
-    {"role": "user", "content": "Which number is larger, 9.9 or 9.11?"},
-]
-
-messages = [
-    {"role": "system", "content": "You are an expert financial analyst. "
-    " You are given questions about various financial topics, from quantitative analysis to portfolio management to ethics of being a chartered financial analyst (CFA). "
-    "Each question includes 3 potential answers, A B and C, one of which is correct (or in some cases, more correct than the others). "
-    "Think step-by-step through the process of solving the question, definining relevant terms/formulas before applying them to the case at hand. "
-    "Finally, indicate the correct answer: A, B, or C."},
-    {"role": "user", "content": "<p>A random sample of 50 CFA exam candidates was found to have an average IQ of 130. The standard deviation among candidates is known (approximately 20). Assuming that IQs follow a normal distribution, the 2-sided 95% confidence interval for the mean IQ of CFA candidates is <em>closest to</em>:</p> "
-    "A. [124.5; 135.5]. "
-    "B. [125;135]. "
-    "C. [130; 135.5]."
-    }
-    #{"role": "user", "content": " Your task is to briefly complete the next step ONLY. DO NOT SOLVE THE PROBLEM. Continue from the pre-existing reasoning process. /think"}, # Your task is to complete the next reasoning step, without solving the problem. /think
-]
-
-# messages = [
-#     {"role": "system", "content": "You are a super intelligent assistant."},
-#     {"role": "user", "content": "how many letter 'r' are there in the word 'raspberry'?"},
-# ]
-
-thresholds = Thresholds(
-    logit_entropy=ThresholdLevel(low=1.2, medium=3, high=1),
-    logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=2)
+import argparse
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
 )
 
-branching = Branching(num_samples = 5)
-
-sampler_cfg = SamplerConfig(
-    thresholds=thresholds,
-    branching=branching
+from entropix.config import (
+    SamplerConfig,
+    ThresholdLevel,
+    Thresholds,
+    MODEL_CONFIG_OVERRIDES,
 )
+from entropix.model import Model, generate
+from entropix.plot import plot2d, plot3d
 
-quantization_config = BitsAndBytesConfig(
-   load_in_4bit=True,
-   bnb_4bit_quant_type="nf4",
-   bnb_4bit_use_double_quant=True,
-   bnb_4bit_compute_dtype=torch.bfloat16
-)
-
-# MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-MODEL_NAME = "Qwen/Qwen3-8B"
-model_name = "Qwen3-8B"
-
-# Load the model and tokenizer
-base_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, device_map="auto", torch_dtype="auto",
-                                                  quantization_config = quantization_config
-                                                  )
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-config = base_model.config
-
-config_overrides = {
-"Qwen2.5_1B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 28,
-    "n_local_kv_heads": 2,
-    "n_local_heads": 12
-},
-"Qwen2.5_3B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 36,
-    "n_local_kv_heads": 2,
-    "n_local_heads": 16
-},
-"Qwen2.5_7B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 28,
-    "n_local_kv_heads": 4,
-    "n_local_heads": 28
-},
-"deepseek": {
-    "head_dim": 128,
-    "use_scaled_rope": True,
-    "n_layers": 36,
-    "n_local_kv_heads": 8,
-    "n_local_heads": 32
-},
-"Qwen3-1.7B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 28,
-    "n_local_kv_heads": 8,
-    "n_local_heads": 16
-},
-"Qwen3-8B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 36,
-    "n_local_kv_heads": 8,
-    "n_local_heads": 32
-},
-"Qwen3-14B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 40,
-    "n_local_kv_heads": 8,
-    "n_local_heads": 40
-},
-"Qwen3-32B": {
-    "head_dim": 128,
-    "use_scaled_rope": False,
-    "n_layers": 64,
-    "n_local_kv_heads": 8,
-    "n_local_heads": 64
-}
-}
-
-# Function to apply config overrides
 def apply_config_overrides(model, config_name, config_overrides):
     if config_name not in config_overrides.keys():
         raise ValueError(f"Config {config_name} not found!")
-    
+
     config_overrides = config_overrides[config_name]
     for attr_name, value in config_overrides.items():
         setattr(model.config, attr_name, value)
 
 
-apply_config_overrides(base_model, model_name, config_overrides)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_path", type=str, default="Qwen/Qwen3-8B", help="Path to the model"
+    )
+    parser.add_argument(
+        "--model_name", type=str, default="Qwen3-8B", help="Name of the model config to use",
+    )
+    parser.add_argument(
+        #"--prompt", type=str, default="Find the number of ordered pairs $(x,y)$, where both $x$ and $y$ are integers between $-100$ and $100$, inclusive, such that $12x^{2}-xy-6y^{2}=0$." #answer: 117
+        "--prompt", type=str, default="Which number is larger, 9.9 or 9.11?" 
+    )
+    parser.add_argument(
+        "--use_prm_model", action="store_true", help="Use PRM model for scoring"
+    )
+    args = parser.parse_args()
 
-config = base_model.config
-# Now model.config has the old key names (n_layer, n_embd, etc.)
-print(config)
+    messages = [
+        {"role": "system", "content": "Please reason step by step, and put your final answer within \\boxed{}."},
+        {"role": "user", "content": args.prompt},
+    ]
 
-model = Model(base_model, config, tokenizer)
+    thresholds = Thresholds(
+        logit_entropy=ThresholdLevel(low=1.2, medium=3, high=1),
+        logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=2),
+    )
 
-# PRM model, COMMENT OUT FOR NOW!!!!!!!!!!!!!!!!!!!!!!    
-# score_model_name = 'RLHFlow/Llama3.1-8B-PRM-Deepseek-Data'
-# accelerator = Accelerator()
-# score_tokenizer = AutoTokenizer.from_pretrained(score_model_name)
-# score_model_params = AutoModelForCausalLM.from_pretrained(score_model_name, torch_dtype=torch.bfloat16).to("cuda").eval()
+    sampler_cfg = SamplerConfig(thresholds=thresholds)
 
-score_model = Model(None, None, None)
- 
-print(f"\nUSER: {messages[1]['content']}")
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
 
-# feedback_provider should "PRM" or "llama3.3"
-gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="PRM", print_stream=True, allow_branching= True, random_select = False,
-                     do_insert_bos = False, do_insert_eos = False, want_insert=True, enable_thinking=False, insert_text= 
-                      # "<|im_end|>\n<|im_start|>user\n oh wait... <|im_end|>\n<|im_start|>assistant\n ")
-                      # " <|im_end|>\n<|im_start|>user\n my bad, let me review my previous step. <|im_end|>\n<|im_start|>assistant\n ")
-                      #[{"role": "user", "content": "let me reflect on my previous solution."}])
-                       "Final Answer: **B. [125; 135]**<|im_end|>\n<|im_start|>user\nplease reflect on your previous solution. /think<|im_end|>\n<|im_start|>assistant\n")
-                      #"Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
-gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
+    base_model = AutoModelForCausalLM.from_pretrained(
+        args.model_path,
+        device_map="auto",
+        torch_dtype="auto",
+        quantization_config=quantization_config,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    
+    apply_config_overrides(base_model, args.model_name, MODEL_CONFIG_OVERRIDES)
 
-print()
-# plot2d(gen_data, out=f"{model_params.name}_2d_plot.html")
-# plot3d(gen_data, out=f"{model_params.name}_3d_plot.html")
+    config = base_model.config
+    model = Model(base_model, config, tokenizer)
+
+    print(f"{args.model_name} output:\n")
+    print("\n\n", "-"*50)
+    gen_data = generate(
+        messages,
+        model,
+        sampler_cfg,
+        stream_output=True,
+        enable_thinking=False,
+        enable_uncertainty_detection=True,
+        enable_insertion=True,
+        insert_at_start=False,
+        insert_at_end=False,
+        insertion_text="\n\nWait,",  # "Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
+    )
+    print("\n\n", "-"*50)
+    print("Saving to output folder...")
+    gen_data.save(f"output/{config.model_type}_gen_data.json")
+    plot2d(gen_data, out=f"output/{config.model_type}_2d_plot.html")
+    plot3d(gen_data, out=f"output/{config.model_type}_3d_plot.html")
+
+if __name__ == "__main__":
+    main()

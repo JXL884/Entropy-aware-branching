@@ -200,20 +200,38 @@ def sample(
     current_step: int = 0,
     last_pause_step: int = -9999
 ) -> Tuple[torch.Tensor, SamplerState]:
-    # Low Entropy, Low Varentropy
-    # if metrics.logit_entropy < cfg.thresholds.logit_entropy.low and metrics.logit_varentropy < cfg.thresholds.logit_varentropy.low:
-    #     sampler_state = SamplerState.ARGMAX
-    #     sampled_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True).to(torch.int32)
-    #     return sampled_token, sampler_state
-
+    """
+    Main sampling function that determines the sampling strategy based on entropy metrics.
+    
+    State Logic:
+    - ADAPTIVE: Default state using adaptive sampling with temperature, top-p, top-k, and min-p
+    - PAUSE: Triggered when entropy and varentropy are high (uncertainty detected)
+    - TEMPERATURE: Available for future temperature-only sampling
+    - BRANCHING: Available for future parallel branching (currently falls back to ADAPTIVE)
+    
+    Args:
+        logits: Model output logits
+        attention_scores: Attention scores (currently unused)
+        metrics: Token-level entropy and variance metrics
+        cfg: Sampler configuration
+        can_branch: Whether branching is allowed
+        generator: Random generator for reproducibility
+        current_step: Current generation step
+        last_pause_step: Last step when pause was triggered (for cooldown)
+    
+    Returns:
+        Tuple of (sampled_token, sampler_state)
+    """
+    # Check if we should trigger pause/branching logic
     if can_branch and (
         metrics.logit_entropy > cfg.thresholds.logit_entropy.high
-        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high and current_step > 30
+        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high 
+        and current_step > 30
     ):
-        # (A) Check if we're still on cooldown
+        # Check if we're still on cooldown
         if (current_step - last_pause_step) < cfg.cooldown_length:
-            # Too soon since last PAUSE => skip pause
-            sampler_state = SamplerState.ARGMAX
+            # Too soon since last PAUSE => use adaptive sampling
+            sampler_state = SamplerState.ADAPTIVE
             sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
             return sampled_token, sampler_state
         else:
@@ -222,7 +240,7 @@ def sample(
             sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
             return sampled_token, sampler_state
     else:
-        # Otherwise, normal flow => Argmax or other sampling
-        sampler_state = SamplerState.ARGMAX
+        # Normal flow => use adaptive sampling
+        sampler_state = SamplerState.ADAPTIVE
         sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
         return sampled_token, sampler_state

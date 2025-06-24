@@ -1,36 +1,344 @@
+from __future__ import annotations
+
 import json
 import logging
-import math, random
 import os
+from enum import Enum
 from dataclasses import asdict, dataclass, field
-from typing import Any, Generator, NamedTuple, Optional, Tuple
-import copy
-import re
+from typing import Any, Generator, List, Literal, NamedTuple, Optional, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from rich import print as rprint
 from openai import OpenAI
-import openai
-from typing import List
+from rich import print as rprint
 from transformers import DynamicCache
-from entropix.config import DEFAULT_MASK_VALUE, SamplerConfig, SamplerState, STATE_COLOR_MAP
+
+from entropix.config import (
+    STATE_COLOR_MAP,
+    SamplerConfig,
+    SamplerState,
+)
 from entropix.kvcache import KVCache
+from entropix.metrics import TokenMetrics, calculate_metrics
 from entropix.sampler import sample
-from entropix.tokenizer import Tokenizer, Message
-from entropix.metrics import AttnMetrics, TokenMetrics, calculate_metrics
-from entropix.PRM import process_response
-from typing import *
+from entropix.tokenizer import Message, Tokenizer
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
-device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(
+    "mps"
+    if torch.backends.mps.is_available()
+    else "cuda"
+    if torch.cuda.is_available()
+    else "cpu"
+)
 print(f"Using device: {device}")
+
+class GenerationMode(Enum):
+    """High-level generation mode used by FlowController."""
+    NORMAL = "normal"           # Regular adaptive sampling
+    TRIGGERED = "triggered"     # Uncertainty detected, waiting for stop token
+    INSERTING = "inserting"     # Currently injecting reflection text
+    COOLDOWN = "cooldown"       # Cooldown period to avoid immediate re-trigger
+
+
+@dataclass
+class FlowController:
+    """Encapsulates pause / insertion / cooldown logic."""
+
+    cfg: SamplerConfig
+    mode: GenerationMode = GenerationMode.NORMAL
+    last_pause_step: int = -9999  # step index of last completed pause
+
+    def request_pause(self, step: int):
+        """Sampler signalled uncertainty – attempt to enter TRIGGERED."""
+        if not (step - self.last_pause_step) < self.cfg.cooldown_length:
+            self.mode = GenerationMode.TRIGGERED
+
+    def on_token_sampled(self, token_text: str, context: list[str], step: int):
+        """Called **after** we sample a token but **before** insertion.
+        Decides whether the stop token criteria are fulfilled.
+        """
+        if self.mode is GenerationMode.TRIGGERED and should_stop_branch(
+            token_text, context
+        ):
+            self.mode = GenerationMode.INSERTING
+
+    def insertion_complete(self, step: int):
+        """Call after reflection insertion is done."""
+        self.mode = GenerationMode.COOLDOWN
+        self.last_pause_step = step
+
+################################################################################
+#                              Helper Functions                                 #
+################################################################################
+
+def get_model_tokens(tokenizer) -> dict:
+    """Dynamically get model-specific tokens from tokenizer."""
+    stop_token_ids = [tokenizer.eos_token_id] if tokenizer.eos_token_id else []
+
+    # Try to find thinking tokens if they exist
+    thinking_token_ids = []
+    stop_thinking_token_ids = []
+
+    if "<think>" in tokenizer.get_vocab():
+        thinking_token_ids = [tokenizer.encode("<think>", add_special_tokens=False)[0]]
+
+    if "</think>" in tokenizer.get_vocab():
+        stop_thinking_token_ids = [
+            tokenizer.encode("</think>", add_special_tokens=False)[0]
+        ]
+        if tokenizer.eos_token_id:
+            stop_thinking_token_ids.append(tokenizer.eos_token_id)
+
+    return {
+        "stop_token_ids": stop_token_ids,
+        "thinking_token_ids": thinking_token_ids,
+        "stop_thinking_token_ids": stop_thinking_token_ids,
+    }
+
+
+def should_insert_at_start(current_state: dict, insert_at_start: bool) -> bool:
+    """Check if we should insert text at the start of generation."""
+    return (
+        insert_at_start
+        and current_state["past_key_values"].seen_tokens == current_state["seqlen"]
+    )
+
+
+def should_insert_at_end(
+    current_state: dict, insert_at_end: bool, stop_token_ids: list
+) -> bool:
+    """Check if we should insert text at the end of generation."""
+    return (
+        insert_at_end
+        and torch.isin(
+            current_state["next_token"], torch.tensor(stop_token_ids, device=device)
+        ).any()
+        and not current_state.get("track_end", False)
+    )
+
+
+def insert_text_at_position(
+    model: Model,
+    insertion_type: Literal["start", "end", "pause"],
+    current_state: dict,
+    sampler_cfg: SamplerConfig,
+    insertion_text: str | None = None,
+) -> dict:
+    """
+    Unified text insertion function that handles BOS, EOS, and PAUSE insertions.
+
+    Args:
+        insertion_type: "start" (BOS), "end" (EOS), or "pause" (reflection)
+        current_state: Current generation state
+        sampler_cfg: Sampler configuration
+        insertion_text: Text to insert (None for auto-generation in pause mode)
+
+    Returns:
+        Updated state with inserted tokens
+    """
+    # 1. Determine insertion text
+    if insertion_text is None:
+        if insertion_type == "pause":
+            # Auto-generate reflection text
+            insertion_text = get_next_step(
+                model=model,
+                original_messages=current_state["messages"],
+                current_response=current_state["response"],
+                max_new_tokens=500,  # Default limit
+            )
+        else:
+            insertion_text = " oh wait"  # Default fallback text
+
+    # 2. Roll back KV cache to before the trigger token
+    #rolled_back_kv = rollback_kv_cache_by_one_token(current_state["past_key_values"])
+
+    # 3. Encode and insert the text
+    insert_ids = model.tokenizer.encode(insertion_text, add_special_tokens=False)
+
+    new_tokens_ids = []
+    new_tokens_text = []
+    new_metrics = []
+    current_past_kv = current_state["past_key_values"]
+
+    # 4. Process each token in the insertion text
+    for rid in insert_ids:
+        new_tokens_ids.append(rid)
+        forced_token = torch.tensor([[rid]], device=device, dtype=torch.int32)
+
+        with torch.inference_mode():
+            forced_outputs = model.weights(
+                input_ids=forced_token,
+                past_key_values=current_past_kv,
+                use_cache=True,
+                output_attentions=True,
+            )
+
+        # Update state for next iteration
+        current_past_kv = forced_outputs.past_key_values
+
+        # Log results
+        token_text = model.tokenizer.decode([rid])
+        new_tokens_text.append(token_text)
+
+        forced_logits = forced_outputs.logits
+        forced_scores = forced_outputs.attentions[-1]
+        forced_metrics = calculate_metrics(forced_logits, forced_scores)
+        new_metrics.append(forced_metrics)
+
+        if current_state["print_stream"]:
+            rprint(f"[{STATE_COLOR_MAP[SamplerState.PAUSE]}]{token_text}[/]", end="")
+
+    # 5. Update current state
+    current_state["response"] += "".join(new_tokens_text)
+    current_state["gen_tokens_text"].extend(new_tokens_text)
+    current_state["gen_metrics"].extend(new_metrics)
+    current_state["past_key_values"] = current_past_kv
+
+    # 6. Update token tensors
+    if new_tokens_ids:
+        new_ids_tensor = torch.tensor(
+            [new_tokens_ids], dtype=torch.int32, device=device
+        )
+        # Append the inserted tokens and their states
+        current_state["gen_tokens"] = torch.cat(
+            (current_state["gen_tokens"], new_ids_tensor), dim=1
+        )
+        current_state["sampler_states"].extend(
+            [SamplerState.PAUSE] * len(new_tokens_ids)
+        )
+
+        # The next token for the main loop is the *last token of the insertion*.
+        # The loop will use this token as input to predict what comes next.
+        last_inserted_id = new_tokens_ids[-1]
+        current_state["next_token"] = torch.tensor(
+            [[last_inserted_id]], device=device, dtype=torch.int32
+        )
+    return current_state
+
+
+def process_normal_token(
+    current_state: dict, sampler_state: SamplerState, stream_output: bool
+) -> dict:
+    """Process a normal token (non-insertion)."""
+    # Log the token
+    current_state["gen_logits"].append(current_state["logits"])
+    current_state["gen_metrics"].append(current_state["metrics"])
+    current_state["sampler_states"].append(sampler_state)
+
+    # Add to generation
+    current_state["gen_tokens"] = torch.cat(
+        (current_state["gen_tokens"], current_state["next_token"]), dim=1
+    )
+    current_state["gen_tokens_text"].append(current_state["token_text"])
+    current_state["response"] += current_state["token_text"]
+
+    if stream_output:
+        rprint(
+            f"[{STATE_COLOR_MAP[sampler_state]}]{current_state['token_text']}[/]",
+            end="",
+        )
+
+    return current_state
+
+
+def initialize_generation_state(
+    messages: list[Message] | list[dict[str, str]] | str,
+    model: Model,
+    format_messages: bool,
+    enable_thinking: bool,
+    max_tokens: int | None,
+) -> dict:
+    """Initialize the generation state."""
+    # Convert messages to standard format
+    if isinstance(messages, str):
+        prompt = messages
+        messages = [Message(role="system", content=prompt)]
+        logging.warning(
+            "entropix.model._generate: prompt passed as a string, cannot save messages to output GenerationData."
+        )
+    elif isinstance(messages, list) and isinstance(messages[0], dict):
+        messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]
+
+    assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
+
+    # Apply chat template if requested
+    if format_messages:
+        print("The prompt is", messages)
+        prompt = model.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            enable_thinking=enable_thinking,
+        )
+        prompt_for_print = model.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+            enable_thinking=enable_thinking,
+        )
+        print(prompt_for_print)
+    else:
+        prompt = messages[-1].content if messages else ""
+
+    # Set max tokens
+    if max_tokens is None or max_tokens > model.params.max_position_embeddings:
+        max_tokens = model.params.max_position_embeddings
+
+    # Initialize tensors
+    tokens = torch.tensor([prompt], dtype=torch.int32).to(device)
+    bs, seqlen = tokens.shape
+
+    return {
+        "messages": messages,
+        "prompt": prompt,
+        "seqlen": seqlen,
+        "max_tokens": max_tokens,
+        "next_token": tokens,
+        "gen_tokens": torch.zeros(1, 1, dtype=torch.int32, device=device),
+        "cur_seen_tokens": 0,
+        "past_key_values": None,
+        "response": "",
+        "gen_tokens_text": [],
+        "gen_logits": [],
+        "gen_metrics": [],
+        "gen_branches": [],
+        "sampler_states": [],
+        "branch_count": 0,
+        "branch_choices": [],
+        "all_pairwise_similarities": [],
+        "track_end": False,
+        "print_stream": False,  # Will be set by caller
+    }
+
+
+def build_generation_data(
+    current_state: dict, messages: list[Message]
+) -> GenerationData:
+    """Build the final GenerationData object."""
+    messages.append(Message(role="assistant", content=current_state["response"]))
+    return GenerationData(
+        prompt=current_state["prompt"],
+        response=current_state["response"],
+        tokens=current_state["gen_tokens_text"],
+        messages=messages,
+        branches=current_state["gen_branches"],
+        metrics=current_state["gen_metrics"],
+        sampler_cfg=current_state.get("sampler_cfg"),
+        sampler_states=current_state["sampler_states"],
+        branch_count=current_state["branch_count"],
+        branch_choices=current_state["branch_choices"],
+        branch_pairwise_similarities=current_state["all_pairwise_similarities"],
+    )
+
 
 ################################################################################
 #                                    Types                                     #
 ################################################################################
+
 
 class LayerWeights(NamedTuple):
     # Attention weights + biases
@@ -62,6 +370,7 @@ class XfmrWeights(NamedTuple):
     output: torch.Tensor
     layer_weights: list[LayerWeights]
 
+
 class ModelParams(NamedTuple):
     name: str
     dim: int
@@ -74,10 +383,12 @@ class ModelParams(NamedTuple):
     use_scaled_rope: bool
     hf_id: str | None = None
 
+
 class Model(NamedTuple):
     weights: XfmrWeights
     params: ModelParams
     tokenizer: Tokenizer
+
 
 @dataclass
 class GenerationData:
@@ -108,42 +419,33 @@ class GenerationData:
             "branch_pairwise_similarities": self.branch_pairwise_similarities,
         }
 
-    # def save(self, fp: str):
-    #     with open(fp, "w") as f:
-    #         s = json.dumps(self.to_dict())
-    #         f.write(s)
-
     def save(self, fp: str):
         dir_path = os.path.dirname(fp)  # Extract the directory path
         if dir_path and not os.path.exists(dir_path):
-            os.makedirs(dir_path) 
+            os.makedirs(dir_path)
 
-        with open(fp, "w") as f:
-            s = json.dumps(self.to_dict())
-            f.write(s)
-
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=4, ensure_ascii=False, sort_keys=True)
 
     @classmethod
     def load(cls, fp: str):
-        with open(fp, 'rb') as f:
+        with open(fp, "rb") as f:
             data = json.load(f)
-        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": ""}
+        defaults = {
+            "branches": [],
+            "metrics": [],
+            "messages": [],
+            "tokens": [],
+            "sampler_states": [],
+            "prompt": "",
+            "response": "",
+            "sampler_cfg": SamplerConfig().model_dump(),
+        }
         for k, default in defaults.items():
             if k not in data:
-                logging.warning(f"Missing field '{k}' in loaded data, using default: {default}")
-                data[k] = default
-        data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
-        data["messages"] = [Message(**m) for m in data["messages"]]
-        data["sampler_cfg"] = SamplerConfig(**data["sampler_cfg"])
-        data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
-        return cls(**data)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]):
-        defaults = {"branches": [], "metrics": [], "messages": [], "tokens": [], "sampler_states": [], "prompt": "", "response": "", "branch_count": 0, "branch_choices": [], "branch_pairwise_similarities": []}
-        for k, default in defaults.items():
-            if k not in data:
-                logging.warning(f"Missing field '{k}' in loaded data, using default: {default}")
+                logging.warning(
+                    f"Missing field '{k}' in loaded data, using default: {default}"
+                )
                 data[k] = default
         data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
         data["messages"] = [Message(**m) for m in data["messages"]]
@@ -151,9 +453,38 @@ class GenerationData:
         data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
         return cls(**data)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]):
+        defaults = {
+            "branches": [],
+            "metrics": [],
+            "messages": [],
+            "tokens": [],
+            "sampler_states": [],
+            "prompt": "",
+            "response": "",
+            "branch_count": 0,
+            "branch_choices": [],
+            "branch_pairwise_similarities": [],
+            "sampler_cfg": SamplerConfig().model_dump(),
+        }
+        for k, default in defaults.items():
+            if k not in data:
+                logging.warning(
+                    f"Missing field '{k}' in loaded data, using default: {default}"
+                )
+                data[k] = default
+        data["metrics"] = [TokenMetrics(**m) for m in data["metrics"]]
+        data["messages"] = [Message(**m) for m in data["messages"]]
+        data["sampler_cfg"] = SamplerConfig.from_dict(data["sampler_cfg"])
+        data["sampler_states"] = [SamplerState[name] for name in data["sampler_states"]]
+        return cls(**data)
+
+
 ################################################################################
 #                                 Inserting                                    #
 ################################################################################
+
 
 @dataclass
 class Branch:
@@ -172,6 +503,7 @@ class Branch:
             "sampler_states": [s.name for s in self.sampler_states],
         }
 
+
 def should_stop_branch(token_text, token_context):
     BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", "\n\n", ".\n\n"}
     # BRANCH_STOP_TOKENS = {"\n\n"}
@@ -184,6 +516,7 @@ def should_stop_branch(token_text, token_context):
         return True
     return False
 
+
 def send_api_message(messages: list[Message]):
     api_key = os.getenv("OPENROUTER_API_KEY")
     assert api_key is not None, "OPENROUTER_API_KEY environment variable not set"
@@ -191,20 +524,20 @@ def send_api_message(messages: list[Message]):
     completion = client.chat.completions.create(
         # https://openrouter.ai/models
         model="meta-llama/llama-3.3-70b-instruct",
-        messages=messages  # type: ignore
+        messages=messages,  # type: ignore
     )
     eval = completion.choices[0].message.content
-    if eval is None: eval = ""
+    if eval is None:
+        eval = ""
     return eval
 
 
 def get_openai_embeddings(
-    texts: list[str], 
-    model_name: str = "text-embedding-3-large"
+    texts: list[str], model_name: str = "text-embedding-3-large"
 ) -> list[list[float]]:
     """
     Returns a list of embedding vectors (list of floats) for each text in `texts`.
-    Uses OpenAI's text-embedding-3-large model by default. 
+    Uses OpenAI's text-embedding-3-large model by default.
     """
     api_key = os.getenv("OPENAI_API_KEY")
     assert api_key is not None, "OPENAI_API_KEY environment variable not set"
@@ -213,14 +546,12 @@ def get_openai_embeddings(
     for text in texts:
         text = text.replace("\n", " ")
 
-        response = client.embeddings.create(
-            input=[text], 
-            model=model_name
-        )
+        response = client.embeddings.create(input=[text], model=model_name)
 
         embedding = response.data[0].embedding
         embeddings.append(embedding)
     return embeddings
+
 
 def pairwise_cosine_similarity(embeddings: list[list[float]]) -> np.ndarray:
     """
@@ -244,7 +575,7 @@ def rollback_kv_cache_by_one_token(past_key_values):
 
     Args:
         past_key_values: The past_key_values from a model.
-                         Can be a transformers.Cache object, a tuple of 
+                         Can be a transformers.Cache object, a tuple of
                          (key_tensor, value_tensor) pairs, or None.
                          K and V tensors are expected to have the sequence length
                          at dimension -2 (e.g., shape [batch, heads, seq_len, dim]).
@@ -255,91 +586,31 @@ def rollback_kv_cache_by_one_token(past_key_values):
 
     # Create a new cache object of the same type
     new_cache = type(past_key_values)()
-    
+
     # Roll back each layer
     for layer_idx in range(len(past_key_values.key_cache)):
         key_tensor = past_key_values.key_cache[layer_idx]
         value_tensor = past_key_values.value_cache[layer_idx]
-        
+
         if key_tensor is not None and value_tensor is not None:
             # Remove the last token (sequence dimension is at -2)
             if key_tensor.size(-2) > 0:  # Check if there are tokens to remove
                 rolled_back_key = key_tensor[..., :-1, :]
                 rolled_back_value = value_tensor[..., :-1, :]
-                
+
                 new_cache.update(rolled_back_key, rolled_back_value, layer_idx)
             else:
                 # If no tokens to remove, keep empty tensors
                 new_cache.update(key_tensor, value_tensor, layer_idx)
-        
+
     return new_cache
 
-def insert_tokens(
-    model,
-    next_token: torch.Tensor,
-    past_key_values,
-    logits: torch.Tensor,
-    metrics,
-    cur_pos: int,
-    seqlen: int,
-    gen_tokens: torch.Tensor,
-    gen_tokens_text: list[str],
-    response: str,
-    gen_logits: list[torch.Tensor],
-    gen_metrics: list,
-    sampler_states: list,
-    sampler_cfg,
-    allow_branching: bool,
-    print_stream: bool,
-    include_trigger_token: bool,
-    insert_text: str
-) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
-    stop_ids = [151645]
-    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.int32)
-
-    new_tokens_ids = []
-    new_tokens_text = []
-    new_metrics = []
-    current_past_kv = past_key_values
-
-    # Correctly encode the text snippet.
-    # insert_ids = model.tokenizer.apply_chat_template(insert_text, add_generation_prompt=True, tokenize=True, enable_thinking=True)
-    insert_ids = model.tokenizer.encode(insert_text, add_special_tokens=False)
-
-    for rid in insert_ids:
-        new_tokens_ids.append(rid)
-        forced_token = torch.tensor([[rid]], device=device, dtype=torch.int32)
-        
-        with torch.inference_mode():
-            forced_outputs = model.weights(
-                input_ids=forced_token,
-                past_key_values=current_past_kv,
-                use_cache=True,
-                output_attentions=True
-            )
-        
-        # Update the state for the next iteration of *this* loop
-        current_past_kv = forced_outputs.past_key_values
-        
-        # Log the results
-        token_text = model.tokenizer.decode([rid])
-        new_tokens_text.append(token_text)
-        
-        forced_logits = forced_outputs.logits
-        forced_scores = forced_outputs.attentions[-1]
-        forced_metrics = calculate_metrics(forced_logits, forced_scores)
-        new_metrics.append(forced_metrics)
-
-        if print_stream:
-            rprint(f"[{STATE_COLOR_MAP[SamplerState.PAUSE]}]{token_text}[/]", end='')
-
-    return new_tokens_ids, new_tokens_text, new_metrics, current_past_kv
 
 def get_next_step(
     model: Model,
     original_messages: list[Message],
     current_response: str,
-    max_new_tokens: int = 500, # Limit the length of the "next step"
+    max_new_tokens: int = 500,  # Limit the length of the "next step"
 ) -> str:
     """
     Asks the model to reflect on its current generation and suggest a next step.
@@ -356,27 +627,32 @@ def get_next_step(
     Returns:
         A string containing the model's suggested next step.
     """
-    thinking: list[int] = [151667] # Qwen's <think>
-    stop_thinking: list[int] = [151645, 151668] # Qwen's </think> and stop token
+    thinking: list[int] = [151667]  # Qwen's <think>
+    stop_thinking: list[int] = [151645, 151668]  # Qwen's </think> and stop token
     thinking_tokens = torch.tensor(thinking, device=device, dtype=torch.int32)
     stop_tokens = torch.tensor(stop_thinking, device=device, dtype=torch.int32)
 
     # 1. Construct the "meta-prompt" for reflection.
     meta_prompt_messages = [
-        Message(role="system", content="You are a collaborative AI expert. You are given a conversation history where the last assistant message is an incomplete, step-by-step solution. "
-    "Your task is to reflect on the previous solution and continue the solution by generating the next logical step. Do not repeat the previous step "
-    # "1.  **Analyze and Verify:** "
-    # "   *   Read the entire conversation to understand the user's goal and the solution's progress. "
-    # "   *   Critically evaluate the last step taken by the assistant. Is the formula correct? Is the reasoning sound? "
-    # "   *   Identify the exact point where the assistant left off. "
-    # "2.  **Plan the Next Step:** "
-    # "   *   Based on your analysis, determine the immediate next action required to solve the problem. "
-    # "   *   For example, if the last step was defining a formula, the next step is likely plugging in the values. If the last step was a calculation, the next step might be interpreting that result or performing the next calculation in the sequence. "
-    ),
+        Message(
+            role="system",
+            content="You are a collaborative AI expert. You are given a conversation history where the last assistant message is an incomplete, step-by-step solution. "
+            "Your task is to reflect on the previous solution and continue the solution by generating the next logical step. Do not repeat the previous step ",
+            # "1.  **Analyze and Verify:** "
+            # "   *   Read the entire conversation to understand the user's goal and the solution's progress. "
+            # "   *   Critically evaluate the last step taken by the assistant. Is the formula correct? Is the reasoning sound? "
+            # "   *   Identify the exact point where the assistant left off. "
+            # "2.  **Plan the Next Step:** "
+            # "   *   Based on your analysis, determine the immediate next action required to solve the problem. "
+            # "   *   For example, if the last step was defining a formula, the next step is likely plugging in the values. If the last step was a calculation, the next step might be interpreting that result or performing the next calculation in the sequence. "
+        ),
         # whatever the user message is, we just need to add the user message to the meta-prompt
         Message(role="user", content=original_messages[-1].content),
         Message(role="assistant", content=current_response),
-        Message(role="assistant", content="I need to briefly complete the next step ONLY. DO NOT SOLVE THE PROBLEM. Continue from the pre-existing reasoning process. /think")
+        Message(
+            role="assistant",
+            content="I need to briefly complete the next step ONLY. DO NOT SOLVE THE PROBLEM. Continue from the pre-existing reasoning process. /think",
+        ),
     ]
 
     # 2. Tokenize the meta-prompt.
@@ -384,7 +660,7 @@ def get_next_step(
         meta_prompt_messages,
         add_generation_prompt=True,
         tokenize=True,
-        enable_thinking=True
+        enable_thinking=True,
     )
     next_token = torch.tensor([meta_prompt_ids], device=device, dtype=torch.int32)
 
@@ -394,9 +670,7 @@ def get_next_step(
     with torch.inference_mode():
         for i in range(max_new_tokens):
             outputs = model.weights(
-                input_ids=next_token,
-                past_key_values=past_key_values,
-                use_cache=True
+                input_ids=next_token, past_key_values=past_key_values, use_cache=True
             )
             past_key_values = outputs.past_key_values
 
@@ -410,286 +684,173 @@ def get_next_step(
             if not torch.isin(next_token, thinking_tokens).any():
                 generated_ids.append(next_token_id.item())
 
-
     # 4. Decode and return the generated text.
     next_step_text = model.tokenizer.decode(generated_ids).strip()
     return next_step_text
 
+
 def _generate(
-    messages: list[Message] | list[dict[str, str]] | str,  # type: ignore -> allow definition to be overriden after type conversion
+    messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
-    score_model : Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
-    print_stream: bool = False,
-    apply_chat_template: bool = True,
-    allow_branching: bool = True,
-    feedback_provider: str = "PRM",
-    random_select: bool = False,
-    calculate_sim: bool = False,
-    do_insert_bos: bool = False,
-    do_insert_eos: bool = False,
-    want_insert: bool = True,
+    stream_output: bool = False,
+    format_messages: bool = True,
     enable_thinking: bool = False,
-    insert_text: str | None = None
-) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
-    
-    stop_ids = [151645]  # Qwen's <|endoftext|> ID
-
-    stop_tokens = torch.tensor(stop_ids, device=device, dtype=torch.int32)
-    if max_tokens is None or max_tokens > model.params.max_position_embeddings:
-        max_tokens = model.params.max_position_embeddings
+    enable_uncertainty_detection: bool = True,
+    enable_insertion: bool = True,
+    insertion_text: str = "\n\nWait",
+    insert_at_start: bool = False,
+    insert_at_end: bool = False
+) -> Generator[
+    Tuple[
+        Optional[str],
+        Optional[TokenMetrics],
+        Optional[SamplerState],
+        Optional[GenerationData],
+    ],
+    None,
+    None,
+]:
+    # 1. Setup and validation
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
 
-    # Convert messages to a prompt
-    if isinstance(messages, str):
-        prompt = messages
-        messages = [Message(role="system", content=prompt)]
-        logging.warning("entropix.model._generate: prompt passed as a string, cannot save messages to output GenerationData.")
-    elif isinstance(messages, list) and isinstance(messages[0], dict):
-        messages = [Message(**m) if not isinstance(m, Message) else m for m in messages]  # type: ignore
-    assert isinstance(messages, list) and all(isinstance(m, Message) for m in messages)
-    messages: list[Message] = messages  # type: ignore
-    if apply_chat_template:
-        print("The prompt is", messages)
-        prompt = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, enable_thinking=enable_thinking)
-        prompt_for_print = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, enable_thinking=enable_thinking)
-        print(prompt_for_print)
+    # 2. Initialize state
+    current_state = initialize_generation_state(
+        messages, model, format_messages, enable_thinking, max_tokens
+    )
+    current_state["print_stream"] = stream_output
+    current_state["sampler_cfg"] = sampler_cfg
 
-    if print_stream:
+    flow = FlowController(sampler_cfg)
+
+    # 3. Get model-specific tokens
+    model_tokens = get_model_tokens(model.tokenizer)
+
+    # 4. Show state legend if streaming
+    if stream_output:
         print()
         for state, color in STATE_COLOR_MAP.items():
             rprint(f"[{color}]■[/] [dim]{state.value}[/]")
         print()
 
-    #print("The prompt is", prompt)
-
+    # 5. Main generation loop
     with torch.inference_mode():
-        tokens = torch.tensor([prompt], dtype=torch.int32).to(device)
-        bs, seqlen = tokens.shape
-
-        next_token = tokens
-        gen_tokens = torch.zeros(1, 1, dtype=torch.int32, device=device)
-        last_pause_step = -9999
-        cur_seen_tokens = 0
-        past_key_values = None
-        response = ""
-        gen_tokens_text = []
-        gen_logits = []
-        gen_metrics = []
-        gen_branches = []
-        sampler_states = []
-        branch_count = 0
-        branch_choices = []
-        all_pairwise_similarities = []
-        track_pause = False
-        track_end = False
-
-        while cur_seen_tokens < max_tokens:
+        while current_state["cur_seen_tokens"] < current_state["max_tokens"]:
+            # Get model outputs
             outputs = model.weights(
-                input_ids=next_token,
-                past_key_values=past_key_values,
+                input_ids=current_state["next_token"],
+                past_key_values=current_state["past_key_values"],
                 use_cache=True,
                 output_attentions=True,
                 output_hidden_states=False,
             )
 
-            logits = outputs.logits
-            past_key_values = outputs.past_key_values
-            cur_seen_tokens = past_key_values.seen_tokens
-            scores = outputs.attentions[-1]
+            # Update state with outputs
+            current_state.update(
+                {
+                    "logits": outputs.logits,
+                    "past_key_values": outputs.past_key_values,
+                    "cur_seen_tokens": outputs.past_key_values.seen_tokens,
+                    "scores": outputs.attentions[-1],
+                }
+            )
 
-            metrics = calculate_metrics(logits, scores)
-            num_tokens_so_far = gen_tokens.shape[1]
+            # Calculate metrics and sample
+            metrics = calculate_metrics(
+                current_state["logits"], current_state["scores"]
+            )
             next_token, sampler_state = sample(
-                logits,
-                scores,  
+                current_state["logits"],
+                current_state["scores"],
                 metrics,
                 sampler_cfg,
-                can_branch=allow_branching and past_key_values.seen_tokens >= seqlen,
-                current_step=past_key_values.seen_tokens,  # new parameter to track the current step
-                last_pause_step=last_pause_step
+                can_branch=enable_uncertainty_detection
+                and current_state["cur_seen_tokens"] >= current_state["seqlen"],
+                current_step=current_state["cur_seen_tokens"],
+                last_pause_step=flow.last_pause_step,
             )
-            token_text = model.tokenizer.decode([next_token.item()])
-            if sampler_state == SamplerState.PAUSE:
-                track_pause = True
-                #print("could pause in the future")
-                if not should_stop_branch(token_text, gen_tokens_text):
-                    sampler_state = SamplerState.ARGMAX
 
-            if track_pause and should_stop_branch(token_text, gen_tokens_text):
-                #print("pausing now")
-                # we are in a pause state
-                if not want_insert:
-                    sampler_state = SamplerState.ARGMAX
-                    track_pause = False
-                    #print("not inserting, continuing")
-                    continue
-                else:
-                    sampler_state = SamplerState.PAUSE
-                    last_pause_step = past_key_values.seen_tokens
-                    track_pause = False
+            current_state.update(
+                {
+                    "next_token": next_token,
+                    "metrics": metrics,
+                    "token_text": model.tokenizer.decode([next_token.item()]),
+                }
+            )
 
-            # ──────────────────────────────────────────────────────────────────
-            # CASE 1: SamplerState.ARGMAX (normal decoding)
-            # ──────────────────────────────────────────────────────────────────
-            if sampler_state == SamplerState.ARGMAX:
-                if past_key_values.seen_tokens == seqlen and do_insert_bos:    
-                    # 2. Roll back the KV cache to the state *before* the trigger token.
-                    rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
+            # 1) Signal potential pause from sampler
+            if sampler_state is SamplerState.PAUSE:
+                flow.request_pause(current_state["cur_seen_tokens"])
 
-                    # 3. Call our clean insertion function.
-                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
-                    model, next_token, past_key_values, logits, metrics,
-                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                    response, gen_logits, gen_metrics, sampler_states,
-                    sampler_cfg, allow_branching, print_stream,
-                    include_trigger_token=False,
-                    insert_text=insert_text
-                    )
+            # 2) Update flow state with the freshly sampled token
+            flow.on_token_sampled(
+                current_state["token_text"],
+                current_state["gen_tokens_text"],
+                current_state["cur_seen_tokens"],
+            )
 
-                    response += "".join(inserted_text)
-                    gen_tokens_text.extend(inserted_text)
-                    gen_metrics.extend(inserted_metrics)
+            # 3) Determine how this token should be coloured in stream output
+            visible_state = (
+                SamplerState.ADAPTIVE
+                if flow.mode in (GenerationMode.TRIGGERED, GenerationMode.INSERTING)
+                else sampler_state
+            )
 
-                    new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
-                    gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
-                    sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
-                    past_key_values = new_past_kv
+            # 4) Log / stream the token normally
+            current_state = process_normal_token(
+                current_state, visible_state, stream_output
+            )
 
-                    if inserted_ids:
-                        last_inserted_id = inserted_ids[-1]
-                        next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
-
-                if torch.isin(next_token, stop_tokens).any() and not track_end and do_insert_eos:
-                    track_end = True
-                    
-                    # phrase = "Final Answer: **A. [124.5; 135.5]**"
-                    # phrase_ids = model.tokenizer.encode(phrase, add_special_tokens=False)
-                    # 2. Roll back the KV cache to the state *before* the trigger token.
-                    # for i in phrase_ids:
-                    #     rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
-                    #     past_key_values = rolled_back_kv
-
-                    past_key_values = rollback_kv_cache_by_one_token(past_key_values)
-
-                    # 3. Call our clean insertion function.
-                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
-                    model, next_token, past_key_values, logits, metrics,
-                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                    response, gen_logits, gen_metrics, sampler_states,
-                    sampler_cfg, allow_branching, print_stream,
-                    include_trigger_token=False,
-                    insert_text=insert_text
-                    )
-
-                    response += "".join(inserted_text)
-                    gen_tokens_text.extend(inserted_text)
-                    gen_metrics.extend(inserted_metrics)
-
-                    new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
-                    gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
-                    sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
-                    past_key_values = new_past_kv
-
-                    if inserted_ids:
-                        last_inserted_id = inserted_ids[-1]
-                        next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
-                else:
-                    # Normal token processing
-                    gen_logits.append(logits)
-                    gen_metrics.append(metrics)
-                    sampler_states.append(sampler_state)
-
-                    gen_tokens = torch.cat((gen_tokens, next_token), dim=1)
-                    token_text = model.tokenizer.decode([next_token.item()])
-                    gen_tokens_text.append(token_text)
-                    response += token_text
-
-                    if print_stream:
-                        rprint(f"[{STATE_COLOR_MAP[sampler_state]}]{token_text}[/]", end='')
-
-                    if torch.isin(next_token, stop_tokens).any():
-                        yield token_text, metrics, sampler_state, None
-                        break
-
-                    yield token_text, metrics, sampler_state, None
-
-        
-            # ──────────────────────────────────────────────────────────────────
-            # CASE 2: SamplerState.PAUSE (we want to forcibly insert " oh wait")
-            # ──────────────────────────────────────────────────────────────────
-            elif sampler_state == SamplerState.PAUSE:
-                # 1. A PAUSE has been triggered by `next_token`.
-                #    DO NOT add this trigger token to our response history yet.
-                #    Log its metrics, as it was a valid generation step.
-                gen_logits.append(logits)
-                gen_metrics.append(metrics)
-                sampler_states.append(sampler_state)
-
-                sampler_cfg.thresholds.logit_entropy.high = sampler_cfg.thresholds.logit_entropy.high + 0.2
-                sampler_cfg.thresholds.logit_varentropy.high = sampler_cfg.thresholds.logit_varentropy.high + 0.2
-
-                if print_stream:
-                    # Visually show the user the trigger token was caught, but don't save it.
-                    rprint(f"({token_text})", end='')
-
-                # 2. Roll back the KV cache to the state *before* the trigger token.
-                rolled_back_kv = rollback_kv_cache_by_one_token(past_key_values)
-
-                # 3. get all the previous tokens and put together to feed into the model in another generation
-                #    To ask for the next step
-
-                # print user messages
-                #print("The user messages are", messages[-1].content)
-
-                next_step_text = get_next_step(
-                    model=model,
-                    original_messages=messages,
-                    current_response=response,
+            # 5) Optional BOS / EOS insertions
+            if should_insert_at_start(current_state, insert_at_start):
+                current_state = insert_text_at_position(
+                    model, "start", current_state, sampler_cfg, insertion_text
+                )
+            elif should_insert_at_end(
+                current_state, insert_at_end, model_tokens["stop_token_ids"]
+            ):
+                current_state["track_end"] = True
+                current_state = insert_text_at_position(
+                    model, "end", current_state, sampler_cfg, insertion_text
                 )
 
-                # 4. Call our clean insertion function.
-                inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
-                model, next_token, past_key_values, logits, metrics,
-                past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                response, gen_logits, gen_metrics, sampler_states,
-                sampler_cfg, allow_branching, print_stream,
-                include_trigger_token=False,
-                insert_text=next_step_text
+            # 6) If flow decided it's time to insert reflection text
+            if flow.mode is GenerationMode.INSERTING and enable_insertion:
+                current_state = insert_text_at_position(
+                    model, "pause", current_state, sampler_cfg, insertion_text
                 )
+                flow.insertion_complete(current_state["cur_seen_tokens"])
 
-                response += "".join(inserted_text)
-                gen_tokens_text.extend(inserted_text)
-                gen_metrics.extend(inserted_metrics)
+            # Check for stop conditions
+            if torch.isin(
+                current_state["next_token"],
+                torch.tensor(model_tokens["stop_token_ids"], device=device),
+            ).any():
+                yield (
+                    current_state["token_text"],
+                    current_state["metrics"],
+                    sampler_state,
+                    None,
+                )
+                break
 
-                new_ids_tensor = torch.tensor([inserted_ids], dtype=torch.int32, device=device)
-                gen_tokens = torch.cat((gen_tokens, new_ids_tensor), dim=1)
-                sampler_states.extend([SamplerState.PAUSE] * len(inserted_ids))
-                past_key_values = new_past_kv
+            yield (
+                current_state["token_text"],
+                current_state["metrics"],
+                sampler_state,
+                None,
+            )
 
-                if inserted_ids:
-                    last_inserted_id = inserted_ids[-1]
-                    next_token = torch.tensor([[last_inserted_id]], device=device, dtype=torch.int32)
-
-        # Build final GenerationData if you want
-        messages.append(Message(role="assistant", content=response))
-        gen = GenerationData(
-            prompt=prompt,
-            response=response,
-            tokens=gen_tokens_text,
-            messages=messages,
-            branches=gen_branches,
-            metrics=gen_metrics,
-            sampler_cfg=sampler_cfg,
-            sampler_states=sampler_states,
-            branch_count=branch_count,
-            branch_choices=branch_choices,
-            branch_pairwise_similarities=all_pairwise_similarities
+        # Return final generation data
+        yield (
+            "",
+            current_state["metrics"],
+            sampler_state,
+            build_generation_data(current_state, current_state["messages"]),
         )
-        yield "", metrics, sampler_state, gen
 
 
 def stream(
@@ -697,54 +858,59 @@ def stream(
     model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
-    print_stream: bool = False,
-    apply_chat_template: bool = True,
+    stream_output: bool = False,
+    format_messages: bool = True,
+    enable_thinking: bool = False,
+    enable_uncertainty_detection: bool = True,
+    enable_insertion: bool = True,
+    insertion_text: str = " oh wait",
+    insert_at_start: bool = False,
+    insert_at_end: bool = False
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
         model=model,
         sampler_cfg=sampler_cfg,
         max_tokens=max_tokens,
-        print_stream=print_stream,
-        apply_chat_template=apply_chat_template,
+        stream_output=stream_output,
+        format_messages=format_messages,
+        enable_thinking=enable_thinking,
+        enable_uncertainty_detection=enable_uncertainty_detection,
+        enable_insertion=enable_insertion,
+        insertion_text=insertion_text,
+        insert_at_start=insert_at_start,
+        insert_at_end=insert_at_end
     ):
         yield token_text, metrics, sampler_state, gen
+
 
 def generate(
     messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
-    score_model: Model,
     sampler_cfg: SamplerConfig | None = None,
     max_tokens: int | None = None,
-    print_stream: bool = False,
-    apply_chat_template: bool = True,
-    allow_branching: bool = True,
-    feedback_provider: str = "PRM",
-    random_select: bool = False,
-    calculate_sim: bool = False,
-    do_insert_bos: bool = False,
-    do_insert_eos: bool = False,
-    want_insert: bool = True,
+    stream_output: bool = False,
+    format_messages: bool = True,
     enable_thinking: bool = False,
-    insert_text: str = " oh wait"
-):
+    enable_uncertainty_detection: bool = True,
+    enable_insertion: bool = True,
+    insertion_text: str = " oh wait",
+    insert_at_start: bool = False,
+    insert_at_end: bool = False
+) -> GenerationData:
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
         model=model,
-        score_model = score_model,
         sampler_cfg=sampler_cfg,
         max_tokens=max_tokens,
-        print_stream=print_stream,
-        apply_chat_template=apply_chat_template,
-        allow_branching=allow_branching,
-        feedback_provider=feedback_provider,
-        random_select=random_select,
-        calculate_sim=calculate_sim,
-        do_insert_bos=do_insert_bos,
-        do_insert_eos=do_insert_eos,
-        want_insert=want_insert,
+        stream_output=stream_output,
+        format_messages=format_messages,
         enable_thinking=enable_thinking,
-        insert_text=insert_text
+        enable_uncertainty_detection=enable_uncertainty_detection,
+        enable_insertion=enable_insertion,
+        insertion_text=insertion_text,
+        insert_at_start=insert_at_start,
+        insert_at_end=insert_at_end
     ):
         if gen is not None:
             return gen
