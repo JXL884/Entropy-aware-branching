@@ -25,7 +25,6 @@ messages = [
     "B. [125;135]. "
     "C. [130; 135.5]."
     }
-    #{"role": "user", "content": " Your task is to briefly complete the next step ONLY. DO NOT SOLVE THE PROBLEM. Continue from the pre-existing reasoning process. /think"}, # Your task is to complete the next reasoning step, without solving the problem. /think
 ]
 
 # messages = [
@@ -152,11 +151,11 @@ print(f"\nUSER: {messages[1]['content']}")
 
 # feedback_provider should "PRM" or "llama3.3"
 gen_data = generate(messages, model, score_model, sampler_cfg, feedback_provider="PRM", print_stream=True, allow_branching= True, random_select = False,
-                     do_insert_bos = False, do_insert_eos = False, want_insert=True, enable_thinking=False, insert_text= 
-                      # "<|im_end|>\n<|im_start|>user\n oh wait... <|im_end|>\n<|im_start|>assistant\n ")
+                     do_insert_bos = False, do_insert_eos = False, want_insert=True, enable_thinking=False, insert_wait=False, insert_text= 
+                       " But wait, ")
                       # " <|im_end|>\n<|im_start|>user\n my bad, let me review my previous step. <|im_end|>\n<|im_start|>assistant\n ")
                       #[{"role": "user", "content": "let me reflect on my previous solution."}])
-                       "Final Answer: **B. [125; 135]**<|im_end|>\n<|im_start|>user\nplease reflect on your previous solution. /think<|im_end|>\n<|im_start|>assistant\n")
+                      # "Final Answer: **B. [125; 135]**<|im_end|>\n<|im_start|>user\nplease reflect on your previous solution. /think<|im_end|>\n<|im_start|>assistant\n")
                       #"Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
 gen_data.save(f"{config.model_type}_gen_data.json") # can load output file in entropix-dashboard
 

@@ -430,6 +430,7 @@ def _generate(
     do_insert_bos: bool = False,
     do_insert_eos: bool = False,
     want_insert: bool = True,
+    insert_wait: bool = False,
     enable_thinking: bool = False,
     insert_text: str | None = None
 ) -> Generator[Tuple[Optional[str], Optional[TokenMetrics], Optional[SamplerState], Optional[GenerationData]], None, None]:
@@ -644,22 +645,33 @@ def _generate(
 
                 # print user messages
                 #print("The user messages are", messages[-1].content)
+                if insert_wait:
+                    # 3. Call our clean insertion function.
+                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
+                        model, next_token, past_key_values, logits, metrics,
+                        past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
+                        response, gen_logits, gen_metrics, sampler_states,
+                        sampler_cfg, allow_branching, print_stream,
+                        include_trigger_token=False,
+                        insert_text=insert_text
+                    )
+                else:
+                    # 3. Ask the model to reflect on its current generation and suggest a next step
+                    next_step_text = get_next_step(
+                        model=model,
+                        original_messages=messages,
+                        current_response=response,
+                    )
 
-                next_step_text = get_next_step(
-                    model=model,
-                    original_messages=messages,
-                    current_response=response,
-                )
-
-                # 4. Call our clean insertion function.
-                inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
-                model, next_token, past_key_values, logits, metrics,
-                past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
-                response, gen_logits, gen_metrics, sampler_states,
-                sampler_cfg, allow_branching, print_stream,
-                include_trigger_token=False,
-                insert_text=next_step_text
-                )
+                    # 4. Call our clean insertion function.
+                    inserted_ids, inserted_text, inserted_metrics, new_past_kv = insert_tokens(
+                    model, next_token, past_key_values, logits, metrics,
+                    past_key_values.seen_tokens, seqlen, gen_tokens, gen_tokens_text,
+                    response, gen_logits, gen_metrics, sampler_states,
+                    sampler_cfg, allow_branching, print_stream,
+                    include_trigger_token=False,
+                    insert_text=next_step_text
+                    )
 
                 response += "".join(inserted_text)
                 gen_tokens_text.extend(inserted_text)
@@ -725,6 +737,7 @@ def generate(
     do_insert_bos: bool = False,
     do_insert_eos: bool = False,
     want_insert: bool = True,
+    insert_wait: bool = False,
     enable_thinking: bool = False,
     insert_text: str = " oh wait"
 ):
@@ -743,6 +756,7 @@ def generate(
         do_insert_bos=do_insert_bos,
         do_insert_eos=do_insert_eos,
         want_insert=want_insert,
+        insert_wait=insert_wait,
         enable_thinking=enable_thinking,
         insert_text=insert_text
     ):
