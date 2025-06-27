@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Literal, Dict
 
 import torch
 from pydantic import BaseModel, field_validator, model_validator
@@ -70,19 +70,147 @@ class ThresholdLevel(BaseModel):
     high: float
 
 
+class EWMAConfig(BaseModel):
+    """Configuration for Exponentially Weighted Moving Average thresholding."""
+    alpha: float = 0.1                  # Smoothing factor (0 < alpha < 1)
+    min_samples: int = 30               # Minimum samples before using EWMA
+    initial_multiplier: float = 1.0     # Multiplier for initial threshold values
+    decay_factor: float = 0.95          # Decay factor for threshold adjustment
+
+
+class DynamicThresholdConfig(BaseModel):
+    """Configuration for dynamic thresholding strategies."""
+    strategy: Literal["static", "ewma"] = "static"
+    ewma: EWMAConfig = EWMAConfig()
+
+
+class DynamicThresholdManager:
+    """Manages dynamic thresholding strategies for entropy-based sampling."""
+    
+    def __init__(self, thresholds: 'Thresholds', config: DynamicThresholdConfig):
+        self.base_thresholds = thresholds
+        self.config = config
+        self.strategy = config.strategy
+        
+        if self.strategy == "ewma":
+            self._init_ewma_state()
+    
+    def _init_ewma_state(self):
+        """Initialize EWMA state variables."""
+        self.ewma_state = {
+            'logit_entropy': {'low': None, 'medium': None, 'high': None},
+            'logit_varentropy': {'low': None, 'medium': None, 'high': None},
+            'attn_entropy': {'low': None, 'medium': None, 'high': None},
+            'attn_varentropy': {'low': None, 'medium': None, 'high': None},
+            'agreement': {'low': None, 'medium': None, 'high': None},
+            'interaction_strength': {'low': None, 'medium': None, 'high': None}
+        }
+        self.sample_count = 0
+        self.ewma_config = self.config.ewma
+    
+    def get_thresholds(self, current_metrics: Dict[str, float]) -> 'Thresholds':
+        """Get current thresholds based on the selected strategy."""
+        if self.strategy == "static":
+            return self.base_thresholds
+        elif self.strategy == "ewma":
+            return self._get_ewma_thresholds(current_metrics)
+        else:
+            raise ValueError(f"Unknown thresholding strategy: {self.strategy}")
+    
+    def _get_ewma_thresholds(self, current_metrics: Dict[str, float]) -> 'Thresholds':
+        """Calculate EWMA-based dynamic thresholds."""
+        self.sample_count += 1
+        
+        # Initialize EWMA values if this is the first sample
+        if self.sample_count == 1:
+            self._initialize_ewma_values()
+        
+        # Update EWMA values for each metric
+        for metric_name, metric_value in current_metrics.items():
+            if metric_name in self.ewma_state:
+                self._update_ewma_metric(metric_name, metric_value)
+        
+        # Create dynamic thresholds based on EWMA values
+        dynamic_thresholds = {}
+        for metric_name, levels in self.ewma_state.items():
+            dynamic_thresholds[metric_name] = ThresholdLevel(
+                low=self._get_ewma_threshold(metric_name, 'low'),
+                medium=self._get_ewma_threshold(metric_name, 'medium'),
+                high=self._get_ewma_threshold(metric_name, 'high')
+            )
+        
+        # Create new Thresholds object with dynamic values
+        return Thresholds(**dynamic_thresholds)
+    
+    def _initialize_ewma_values(self):
+        """Initialize EWMA values with base thresholds."""
+        for metric_name in self.ewma_state.keys():
+            base_threshold = getattr(self.base_thresholds, metric_name)
+            for level in ['low', 'medium', 'high']:
+                base_value = getattr(base_threshold, level)
+                self.ewma_state[metric_name][level] = base_value * self.ewma_config.initial_multiplier
+    
+    def _update_ewma_metric(self, metric_name: str, current_value: float):
+        """Update EWMA values for a specific metric."""
+        if metric_name not in self.ewma_state:
+            return
+        
+        # Only start using EWMA after minimum samples
+        if self.sample_count < self.ewma_config.min_samples:
+            return
+        
+        # Update each threshold level based on current metric value
+        for level in ['low', 'medium', 'high']:
+            current_ewma = self.ewma_state[metric_name][level]
+            if current_ewma is not None:
+                # Calculate adaptive threshold based on current metric value
+                adaptive_threshold = current_value * self._get_level_multiplier(level)
+                
+                # Apply EWMA update
+                new_ewma = (self.ewma_config.alpha * adaptive_threshold + 
+                           (1 - self.ewma_config.alpha) * current_ewma)
+                
+                # Apply decay factor to prevent thresholds from growing too large
+                self.ewma_state[metric_name][level] = new_ewma * self.ewma_config.decay_factor
+    
+    def _get_level_multiplier(self, level: str) -> float:
+        """Get multiplier for different threshold levels."""
+        multipliers = {
+            'low': 0.8,
+            'medium': 1.0,
+            'high': 1.2
+        }
+        return multipliers.get(level, 1.0)
+    
+    def _get_ewma_threshold(self, metric_name: str, level: str) -> float:
+        """Get current EWMA threshold value."""
+        if metric_name not in self.ewma_state or level not in self.ewma_state[metric_name]:
+            # Fallback to base threshold
+            base_threshold = getattr(self.base_thresholds, metric_name)
+            return getattr(base_threshold, level)
+        
+        ewma_value = self.ewma_state[metric_name][level]
+        if ewma_value is None:
+            # Fallback to base threshold
+            base_threshold = getattr(self.base_thresholds, metric_name)
+            return getattr(base_threshold, level)
+        
+        return ewma_value
+    
+    def reset(self):
+        """Reset the dynamic threshold manager state."""
+        if self.strategy == "ewma":
+            self._init_ewma_state()
+
+
 class Thresholds(BaseModel):
     logit_entropy: ThresholdLevel = ThresholdLevel(low=0.6, medium=1.584, high=2.17)
     logit_varentropy: ThresholdLevel = ThresholdLevel(low=1.584, medium=3.28, high=5.50)
-    # logit_entropy: ThresholdLevel = ThresholdLevel(low=1.08 * 1.2, medium=2.85 * 1.2, high=3.91 * 1.2)
-    # logit_varentropy: ThresholdLevel = ThresholdLevel(low=2.85 * 1.2, medium=5.90 * 1.2, high=9.5 * 1.2)
     attn_entropy: ThresholdLevel = ThresholdLevel(low=8.989, medium=8.99, high=8.991)
-    attn_varentropy: ThresholdLevel = ThresholdLevel(
-        low=5.212, medium=5.9125, high=6.92
-    )
+    attn_varentropy: ThresholdLevel = ThresholdLevel(low=5.212, medium=5.9125, high=6.92)
     agreement: ThresholdLevel = ThresholdLevel(low=2e-06, medium=4e-06, high=5e-06)
-    interaction_strength: ThresholdLevel = ThresholdLevel(
-        low=0.2, medium=0.247, high=0.264
-    )
+    interaction_strength: ThresholdLevel = ThresholdLevel(low=0.2, medium=0.247, high=0.264)
+    dynamic: DynamicThresholdConfig = DynamicThresholdConfig()
 
 
 class AdaptiveCoefficients(BaseModel):

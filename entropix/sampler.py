@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple, Optional
 
 from entropix.metrics import TokenMetrics
-from entropix.config import SamplerState, SamplerConfig
+from entropix.config import SamplerState, SamplerConfig, DynamicThresholdManager
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
@@ -64,8 +64,22 @@ def adaptive_sample(
     logits: torch.Tensor,
     metrics: TokenMetrics,
     cfg: SamplerConfig,
+    threshold_manager: Optional[DynamicThresholdManager] = None,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
+    # Get current thresholds (static or dynamic)
+    if threshold_manager is not None:
+        current_thresholds = threshold_manager.get_thresholds({
+            'logit_entropy': metrics.logit_entropy,
+            'logit_varentropy': metrics.logit_varentropy,
+            'attn_entropy': metrics.attn_entropy,
+            'attn_varentropy': metrics.attn_varentropy,
+            'agreement': metrics.agreement,
+            'interaction_strength': metrics.interaction_strength
+        })
+    else:
+        current_thresholds = cfg.thresholds
+    
     # calculate adaptive sampling parameters
     temperature = cfg.temperature * (
         1 \
@@ -134,12 +148,12 @@ def adaptive_sample(
 
         # fmt: off
         confidence_score = sum((
-                (1 - metrics.logit_entropy / cfg.thresholds.logit_entropy.high) * cfg.adaptive.score.logit_entropy,
-                (1 - metrics.attn_entropy / cfg.thresholds.attn_entropy.high) * cfg.adaptive.score.attn_entropy,
-                (1 - metrics.logit_varentropy / cfg.thresholds.logit_varentropy.high) * cfg.adaptive.score.logit_varentropy,
-                (1 - metrics.attn_varentropy / cfg.thresholds.attn_varentropy.high) * cfg.adaptive.score.attn_varentropy,
-                (metrics.agreement / cfg.thresholds.agreement.high) * cfg.adaptive.score.agreement,
-                (metrics.interaction_strength / cfg.thresholds.interaction_strength.high) * cfg.adaptive.score.interaction_strength
+                (1 - metrics.logit_entropy / current_thresholds.logit_entropy.high) * cfg.adaptive.score.logit_entropy,
+                (1 - metrics.attn_entropy / current_thresholds.attn_entropy.high) * cfg.adaptive.score.attn_entropy,
+                (1 - metrics.logit_varentropy / current_thresholds.logit_varentropy.high) * cfg.adaptive.score.logit_varentropy,
+                (1 - metrics.attn_varentropy / current_thresholds.attn_varentropy.high) * cfg.adaptive.score.attn_varentropy,
+                (metrics.agreement / current_thresholds.agreement.high) * cfg.adaptive.score.agreement,
+                (metrics.interaction_strength / current_thresholds.interaction_strength.high) * cfg.adaptive.score.interaction_strength
             ))
         # fmt: on
 
@@ -195,6 +209,7 @@ def sample(
     attention_scores: torch.Tensor,
     metrics: TokenMetrics,
     cfg: SamplerConfig,
+    threshold_manager: Optional[DynamicThresholdManager] = None,
     can_branch: bool = False,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
     current_step: int = 0,
@@ -214,6 +229,7 @@ def sample(
         attention_scores: Attention scores (currently unused)
         metrics: Token-level entropy and variance metrics
         cfg: Sampler configuration
+        threshold_manager: Optional dynamic threshold manager for adaptive thresholds
         can_branch: Whether branching is allowed
         generator: Random generator for reproducibility
         current_step: Current generation step
@@ -222,25 +238,38 @@ def sample(
     Returns:
         Tuple of (sampled_token, sampler_state)
     """
+    # Get current thresholds (static or dynamic)
+    if threshold_manager is not None:
+        current_thresholds = threshold_manager.get_thresholds({
+            'logit_entropy': metrics.logit_entropy,
+            'logit_varentropy': metrics.logit_varentropy,
+            'attn_entropy': metrics.attn_entropy,
+            'attn_varentropy': metrics.attn_varentropy,
+            'agreement': metrics.agreement,
+            'interaction_strength': metrics.interaction_strength
+        })
+    else:
+        current_thresholds = cfg.thresholds
+    
     # Check if we should trigger pause/branching logic
     if can_branch and (
-        metrics.logit_entropy > cfg.thresholds.logit_entropy.high
-        and metrics.logit_varentropy > cfg.thresholds.logit_varentropy.high 
+        metrics.logit_entropy > current_thresholds.logit_entropy.high
+        and metrics.logit_varentropy > current_thresholds.logit_varentropy.high 
         and current_step > 30
     ):
         # Check if we're still on cooldown
         if (current_step - last_pause_step) < cfg.cooldown_length:
             # Too soon since last PAUSE => use adaptive sampling
             sampler_state = SamplerState.ADAPTIVE
-            sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+            sampled_token = adaptive_sample(logits, metrics, cfg, threshold_manager, generator=generator)
             return sampled_token, sampler_state
         else:
             # Allowed to pause
             sampler_state = SamplerState.PAUSE
-            sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+            sampled_token = adaptive_sample(logits, metrics, cfg, threshold_manager, generator=generator)
             return sampled_token, sampler_state
     else:
         # Normal flow => use adaptive sampling
         sampler_state = SamplerState.ADAPTIVE
-        sampled_token = adaptive_sample(logits, metrics, cfg, generator=generator)
+        sampled_token = adaptive_sample(logits, metrics, cfg, threshold_manager, generator=generator)
         return sampled_token, sampler_state

@@ -17,27 +17,105 @@ def plot2d(generation_data: GenerationData, out: str | None = None, max_tokens: 
     attn_varentropies = np.array([token_metrics.attn_varentropy for token_metrics in generation_data.metrics])
     sampler_states = generation_data.sampler_states
 
-    thresholds = [
-        # Entropy thresholds (blue)
-        (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(0,0,255,0.7)', 'Low Entropy'),
-        (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
-        (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0,0,255,0.7)', 'High Entropy'),
-        # Varentropy thresholds (red)
-        (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
-        (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
-        (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(255,0,0,0.7)', 'High Varentropy'),
-    ]
-    for threshold, color, name in thresholds:
+    # Use actual thresholds from history if available, otherwise use static thresholds
+    use_dynamic_thresholds = len(generation_data.threshold_history) > 0
+    
+    if use_dynamic_thresholds:
+        # Extract threshold values from history
+        threshold_history = generation_data.threshold_history
+        
+        # Create arrays for each threshold level
+        entropy_low = np.array([th['logit_entropy']['low'] for th in threshold_history])
+        entropy_medium = np.array([th['logit_entropy']['medium'] for th in threshold_history])
+        entropy_high = np.array([th['logit_entropy']['high'] for th in threshold_history])
+        varentropy_low = np.array([th['logit_varentropy']['low'] for th in threshold_history])
+        varentropy_medium = np.array([th['logit_varentropy']['medium'] for th in threshold_history])
+        varentropy_high = np.array([th['logit_varentropy']['high'] for th in threshold_history])
+        
+        # Plot dynamic thresholds
         fig.add_trace(
             go.Scatter(
-                x=[0, len(tokens)],
-                y=[threshold, threshold],
+                x=list(range(len(tokens))),
+                y=entropy_low,
                 mode='lines',
-                line=dict(color=color, dash='dash', width=1),
-                name=name,
-                # visible='legendonly'  # Hidden by default
+                line=dict(color='rgba(0,0,255,0.7)', dash='dash', width=1),
+                name='Dynamic Low Entropy',
+                visible='legendonly'
             )
         )
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(tokens))),
+                y=entropy_medium,
+                mode='lines',
+                line=dict(color='rgba(0,0,255,0.7)', dash='dash', width=1),
+                name='Dynamic Medium Entropy',
+                visible='legendonly'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(tokens))),
+                y=entropy_high,
+                mode='lines',
+                line=dict(color='rgba(0,0,255,0.7)', dash='dash', width=1),
+                name='Dynamic High Entropy',
+                visible='legendonly'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(tokens))),
+                y=varentropy_low,
+                mode='lines',
+                line=dict(color='rgba(255,0,0,0.7)', dash='dash', width=1),
+                name='Dynamic Low Varentropy',
+                visible='legendonly'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(tokens))),
+                y=varentropy_medium,
+                mode='lines',
+                line=dict(color='rgba(255,0,0,0.7)', dash='dash', width=1),
+                name='Dynamic Medium Varentropy',
+                visible='legendonly'
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(tokens))),
+                y=varentropy_high,
+                mode='lines',
+                line=dict(color='rgba(255,0,0,0.7)', dash='dash', width=1),
+                name='Dynamic High Varentropy',
+                visible='legendonly'
+            )
+        )
+    else:
+        # Use static thresholds (original behavior)
+        thresholds = [
+            # Entropy thresholds (blue)
+            (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(0,0,255,0.7)', 'Low Entropy'),
+            (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0,0,255,0.7)', 'Medium Entropy'),
+            (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0,0,255,0.7)', 'High Entropy'),
+            # Varentropy thresholds (red)
+            (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255,0,0,0.7)', 'Low Varentropy'),
+            (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(255,0,0,0.7)', 'Medium Varentropy'),
+            (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(255,0,0,0.7)', 'High Varentropy'),
+        ]
+        for threshold, color, name in thresholds:
+            fig.add_trace(
+                go.Scatter(
+                    x=[0, len(tokens)],
+                    y=[threshold, threshold],
+                    mode='lines',
+                    line=dict(color=color, dash='dash', width=1),
+                    name=name,
+                    # visible='legendonly'  # Hidden by default
+                )
+            )
 
     # Main traces
     fig.add_trace(go.Scatter(name='Entropy', line=dict(color='blue'), x=list(range(len(entropies))), y=entropies, yaxis='y1'))
@@ -236,49 +314,97 @@ def plot3d(generation_data: GenerationData, out: str | None = None):
                 visible=False
             )
 
-    thresholds = [
-        (
-            'logits_entropy', 'z', [
-                (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(255, 0, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0, 255, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0, 0, 255, 0.2)'),
-            ], 'logits'
-        ),
-        (
-            'logits_varentropy', 'y', [
-                (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255, 165, 0, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(165, 42, 42, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(128, 0, 128, 0.2)'),
-            ], 'logits'
-        ),
-        (
-            'attention_entropy', 'z', [
-                (generation_data.sampler_cfg.thresholds.attn_entropy.low, 'rgba(255, 192, 203, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.attn_entropy.medium, 'rgba(0, 255, 255, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.attn_entropy.high, 'rgba(255, 255, 0, 0.2)'),
-            ], 'attention'
-        ),
-        (
-            'attention_varentropy',
-            'y',
-            [
-                (generation_data.sampler_cfg.thresholds.attn_varentropy.low, 'rgba(70, 130, 180, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.attn_varentropy.medium, 'rgba(244, 164, 96, 0.2)'),
-                (generation_data.sampler_cfg.thresholds.attn_varentropy.high, 'rgba(50, 205, 50, 0.2)'),
-            ],
-            'attention',
-        ),
-        # (
-        #     'attention_varentropy',
-        #     'z',
-        #     [
-        #         (generation_data.sampler_cfg.low_attention_varentropy_threshold, 'rgba(70, 130, 180, 0.2)'),
-        #         (generation_data.sampler_cfg.medium_attention_varentropy_threshold, 'rgba(244, 164, 96, 0.2)'),
-        #         (generation_data.sampler_cfg.high_attention_varentropy_threshold, 'rgba(50, 205, 50, 0.2)'),
-        #     ],
-        #     'attention',
-        # )
-    ]
+    # Use actual thresholds from history if available, otherwise use static thresholds
+    use_dynamic_thresholds = len(generation_data.threshold_history) > 0
+    
+    if use_dynamic_thresholds:
+        # Extract threshold values from history
+        threshold_history = generation_data.threshold_history
+        
+        # Create arrays for each threshold level
+        entropy_low = np.array([th['logit_entropy']['low'] for th in threshold_history])
+        entropy_medium = np.array([th['logit_entropy']['medium'] for th in threshold_history])
+        entropy_high = np.array([th['logit_entropy']['high'] for th in threshold_history])
+        varentropy_low = np.array([th['logit_varentropy']['low'] for th in threshold_history])
+        varentropy_medium = np.array([th['logit_varentropy']['medium'] for th in threshold_history])
+        varentropy_high = np.array([th['logit_varentropy']['high'] for th in threshold_history])
+        
+        # Use average values for 3D planes (since planes are static in 3D)
+        avg_entropy_low = np.mean(entropy_low)
+        avg_entropy_medium = np.mean(entropy_medium)
+        avg_entropy_high = np.mean(entropy_high)
+        avg_varentropy_low = np.mean(varentropy_low)
+        avg_varentropy_medium = np.mean(varentropy_medium)
+        avg_varentropy_high = np.mean(varentropy_high)
+        
+        thresholds = [
+            (
+                'logits_entropy', 'z', [
+                    (avg_entropy_low, 'rgba(255, 0, 0, 0.2)'),
+                    (avg_entropy_medium, 'rgba(0, 255, 0, 0.2)'),
+                    (avg_entropy_high, 'rgba(0, 0, 255, 0.2)'),
+                ], 'logits'
+            ),
+            (
+                'logits_varentropy', 'y', [
+                    (avg_varentropy_low, 'rgba(255, 165, 0, 0.2)'),
+                    (avg_varentropy_medium, 'rgba(165, 42, 42, 0.2)'),
+                    (avg_varentropy_high, 'rgba(128, 0, 128, 0.2)'),
+                ], 'logits'
+            ),
+            (
+                'attention_entropy', 'z', [
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.low, 'rgba(255, 192, 203, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.medium, 'rgba(0, 255, 255, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.high, 'rgba(255, 255, 0, 0.2)'),
+                ], 'attention'
+            ),
+            (
+                'attention_varentropy',
+                'y',
+                [
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.low, 'rgba(70, 130, 180, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.medium, 'rgba(244, 164, 96, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.high, 'rgba(50, 205, 50, 0.2)'),
+                ],
+                'attention',
+            ),
+        ]
+    else:
+        # Use static thresholds (original behavior)
+        thresholds = [
+            (
+                'logits_entropy', 'z', [
+                    (generation_data.sampler_cfg.thresholds.logit_entropy.low, 'rgba(255, 0, 0, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.logit_entropy.medium, 'rgba(0, 255, 0, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.logit_entropy.high, 'rgba(0, 0, 255, 0.2)'),
+                ], 'logits'
+            ),
+            (
+                'logits_varentropy', 'y', [
+                    (generation_data.sampler_cfg.thresholds.logit_varentropy.low, 'rgba(255, 165, 0, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.logit_varentropy.medium, 'rgba(165, 42, 42, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.logit_varentropy.high, 'rgba(128, 0, 128, 0.2)'),
+                ], 'logits'
+            ),
+            (
+                'attention_entropy', 'z', [
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.low, 'rgba(255, 192, 203, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.medium, 'rgba(0, 255, 255, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_entropy.high, 'rgba(255, 255, 0, 0.2)'),
+                ], 'attention'
+            ),
+            (
+                'attention_varentropy',
+                'y',
+                [
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.low, 'rgba(70, 130, 180, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.medium, 'rgba(244, 164, 96, 0.2)'),
+                    (generation_data.sampler_cfg.thresholds.attn_varentropy.high, 'rgba(50, 205, 50, 0.2)'),
+                ],
+                'attention',
+            ),
+        ]
 
     for threshold_type, axis, threshold_list, data_type in thresholds:
         for threshold, color in threshold_list:

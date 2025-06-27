@@ -19,6 +19,7 @@ from entropix.config import (
     STATE_COLOR_MAP,
     SamplerConfig,
     SamplerState,
+    DynamicThresholdManager,
 )
 from entropix.kvcache import KVCache
 from entropix.metrics import TokenMetrics, calculate_metrics
@@ -36,12 +37,15 @@ device = torch.device(
 )
 print(f"Using device: {device}")
 
+
 class GenerationMode(Enum):
     """High-level generation mode used by FlowController."""
-    NORMAL = "normal"           # Regular adaptive sampling
-    TRIGGERED = "triggered"     # Uncertainty detected, waiting for stop token
-    INSERTING = "inserting"     # Currently injecting reflection text
-    COOLDOWN = "cooldown"       # Cooldown period to avoid immediate re-trigger
+
+    NORMAL = "normal"                           # Regular adaptive sampling
+    TRIGGERED = "triggered"                     # Uncertainty detected, waiting for stop token
+    INSERTING = "inserting"                     # Currently injecting reflection text
+    COOLDOWN = "cooldown"                       # Cooldown period to avoid immediate re-trigger
+    THINKING_COMPLETE = "thinking_complete"     # Thinking phase completed, no more insertions
 
 
 @dataclass
@@ -50,20 +54,27 @@ class FlowController:
 
     cfg: SamplerConfig
     mode: GenerationMode = GenerationMode.NORMAL
-    last_pause_step: int = -9999  # step index of last completed pause
+    last_pause_step: int = -9999                # step index of last completed pause
+    thinking_complete: bool = False             # flag to track if thinking phase is complete
 
     def request_pause(self, step: int):
         """Sampler signalled uncertainty – attempt to enter TRIGGERED."""
         if not (step - self.last_pause_step) < self.cfg.cooldown_length:
             self.mode = GenerationMode.TRIGGERED
 
-    def on_token_sampled(self, token_text: str, context: list[str], step: int):
-        """Called **after** we sample a token but **before** insertion.
-        Decides whether the stop token criteria are fulfilled.
-        """
-        if self.mode is GenerationMode.TRIGGERED and should_stop_branch(
-            token_text, context
-        ):
+    def on_token_sampled(self, token_text: str, context: list[str], step: int, 
+                        stop_thinking_token_ids: list[int], next_token_id: int):
+        """Called **after** we sample a token but **before** insertion. Decides whether the stop token criteria are fulfilled."""
+        # Check for thinking completion first (only if not already complete)
+        if not self.thinking_complete and next_token_id in stop_thinking_token_ids:
+            self.thinking_complete = True
+            self.mode = GenerationMode.THINKING_COMPLETE
+            return
+            
+        # Existing logic for pause detection (only if thinking is not complete)
+        if (self.mode is GenerationMode.TRIGGERED and 
+            not self.thinking_complete and 
+            should_stop_branch(token_text, context)):
             self.mode = GenerationMode.INSERTING
 
     def insertion_complete(self, step: int):
@@ -71,15 +82,16 @@ class FlowController:
         self.mode = GenerationMode.COOLDOWN
         self.last_pause_step = step
 
+
 ################################################################################
 #                              Helper Functions                                 #
 ################################################################################
+
 
 def get_model_tokens(tokenizer) -> dict:
     """Dynamically get model-specific tokens from tokenizer."""
     stop_token_ids = [tokenizer.eos_token_id] if tokenizer.eos_token_id else []
 
-    # Try to find thinking tokens if they exist
     thinking_token_ids = []
     stop_thinking_token_ids = []
 
@@ -151,10 +163,10 @@ def insert_text_at_position(
                 max_new_tokens=500,  # Default limit
             )
         else:
-            insertion_text = " oh wait"  # Default fallback text
+            insertion_text = "Wait"  # Default fallback text
 
-    # 2. Roll back KV cache to before the trigger token
-    #rolled_back_kv = rollback_kv_cache_by_one_token(current_state["past_key_values"])
+    # 2. Roll back KV cache to before the trigger token (not needed for the middle approach)
+    # rolled_back_kv = rollback_kv_cache_by_one_token(current_state["past_key_values"])
 
     # 3. Encode and insert the text
     insert_ids = model.tokenizer.encode(insertion_text, add_special_tokens=False)
@@ -307,6 +319,7 @@ def initialize_generation_state(
         "gen_metrics": [],
         "gen_branches": [],
         "sampler_states": [],
+        "threshold_history": [],  
         "branch_count": 0,
         "branch_choices": [],
         "all_pairwise_similarities": [],
@@ -332,6 +345,7 @@ def build_generation_data(
         branch_count=current_state["branch_count"],
         branch_choices=current_state["branch_choices"],
         branch_pairwise_similarities=current_state["all_pairwise_similarities"],
+        threshold_history=current_state["threshold_history"],
     )
 
 
@@ -403,6 +417,9 @@ class GenerationData:
     branch_count: int = 0
     branch_choices: List[int] = field(default_factory=list)
     branch_pairwise_similarities: List[List[float]] = field(default_factory=list)
+    threshold_history: List[dict] = field(
+        default_factory=list
+    )  # Track actual thresholds used
 
     def to_dict(self):
         return {
@@ -417,6 +434,7 @@ class GenerationData:
             "branch_count": self.branch_count,
             "branch_choices": self.branch_choices,
             "branch_pairwise_similarities": self.branch_pairwise_similarities,
+            "threshold_history": self.threshold_history,
         }
 
     def save(self, fp: str):
@@ -440,6 +458,7 @@ class GenerationData:
             "prompt": "",
             "response": "",
             "sampler_cfg": SamplerConfig().model_dump(),
+            "threshold_history": [],
         }
         for k, default in defaults.items():
             if k not in data:
@@ -467,6 +486,7 @@ class GenerationData:
             "branch_choices": [],
             "branch_pairwise_similarities": [],
             "sampler_cfg": SamplerConfig().model_dump(),
+            "threshold_history": [],
         }
         for k, default in defaults.items():
             if k not in data:
@@ -505,8 +525,20 @@ class Branch:
 
 
 def should_stop_branch(token_text, token_context):
-    BRANCH_STOP_TOKENS = {".", ". ", ".\n", "!", "?", "\n\n", ".\n\n"}
-    # BRANCH_STOP_TOKENS = {"\n\n"}
+    BRANCH_STOP_TOKENS = [
+        "\n\n",
+        ",\n\n",
+        ".\n\n",
+        "]\n\n",
+        ")\n\n",
+        "],\n\n",
+        "].\n\n",
+        "].\n\n",
+        ").\n\n",
+        ".)\n\n",
+        "?\n\n",
+        "!\n\n",
+    ]
 
     if token_text in BRANCH_STOP_TOKENS:
         if token_text == ".":
@@ -701,7 +733,7 @@ def _generate(
     enable_insertion: bool = True,
     insertion_text: str = "\n\nWait",
     insert_at_start: bool = False,
-    insert_at_end: bool = False
+    insert_at_end: bool = False,
 ) -> Generator[
     Tuple[
         Optional[str],
@@ -716,6 +748,13 @@ def _generate(
     if sampler_cfg is None:
         logging.warning("No sampler config provided, using default config")
         sampler_cfg = SamplerConfig()
+
+    # Initialize dynamic threshold manager if dynamic thresholding is enabled
+    threshold_manager = None
+    if sampler_cfg.thresholds.dynamic.strategy != "static":
+        threshold_manager = DynamicThresholdManager(
+            sampler_cfg.thresholds, sampler_cfg.thresholds.dynamic
+        )
 
     # 2. Initialize state
     current_state = initialize_generation_state(
@@ -762,11 +801,64 @@ def _generate(
             metrics = calculate_metrics(
                 current_state["logits"], current_state["scores"]
             )
+
+            # Get current thresholds (static or dynamic) for tracking
+            current_thresholds = None
+            if threshold_manager is not None:
+                current_thresholds = threshold_manager.get_thresholds(
+                    {
+                        "logit_entropy": metrics.logit_entropy,
+                        "logit_varentropy": metrics.logit_varentropy,
+                        "attn_entropy": metrics.attn_entropy,
+                        "attn_varentropy": metrics.attn_varentropy,
+                        "agreement": metrics.agreement,
+                        "interaction_strength": metrics.interaction_strength,
+                    }
+                )
+            else:
+                current_thresholds = sampler_cfg.thresholds
+
+            # Store threshold values for this step
+            threshold_step = {
+                "logit_entropy": {
+                    "low": current_thresholds.logit_entropy.low,
+                    "medium": current_thresholds.logit_entropy.medium,
+                    "high": current_thresholds.logit_entropy.high,
+                },
+                "logit_varentropy": {
+                    "low": current_thresholds.logit_varentropy.low,
+                    "medium": current_thresholds.logit_varentropy.medium,
+                    "high": current_thresholds.logit_varentropy.high,
+                },
+                "attn_entropy": {
+                    "low": current_thresholds.attn_entropy.low,
+                    "medium": current_thresholds.attn_entropy.medium,
+                    "high": current_thresholds.attn_entropy.high,
+                },
+                "attn_varentropy": {
+                    "low": current_thresholds.attn_varentropy.low,
+                    "medium": current_thresholds.attn_varentropy.medium,
+                    "high": current_thresholds.attn_varentropy.high,
+                },
+                "agreement": {
+                    "low": current_thresholds.agreement.low,
+                    "medium": current_thresholds.agreement.medium,
+                    "high": current_thresholds.agreement.high,
+                },
+                "interaction_strength": {
+                    "low": current_thresholds.interaction_strength.low,
+                    "medium": current_thresholds.interaction_strength.medium,
+                    "high": current_thresholds.interaction_strength.high,
+                },
+            }
+            current_state["threshold_history"].append(threshold_step)
+
             next_token, sampler_state = sample(
                 current_state["logits"],
                 current_state["scores"],
                 metrics,
                 sampler_cfg,
+                threshold_manager=threshold_manager,
                 can_branch=enable_uncertainty_detection
                 and current_state["cur_seen_tokens"] >= current_state["seqlen"],
                 current_step=current_state["cur_seen_tokens"],
@@ -790,12 +882,14 @@ def _generate(
                 current_state["token_text"],
                 current_state["gen_tokens_text"],
                 current_state["cur_seen_tokens"],
+                model_tokens["stop_thinking_token_ids"],
+                next_token.item(),
             )
 
             # 3) Determine how this token should be coloured in stream output
             visible_state = (
                 SamplerState.ADAPTIVE
-                if flow.mode in (GenerationMode.TRIGGERED, GenerationMode.INSERTING)
+                if flow.mode in (GenerationMode.TRIGGERED, GenerationMode.INSERTING, GenerationMode.THINKING_COMPLETE)
                 else sampler_state
             )
 
@@ -804,21 +898,23 @@ def _generate(
                 current_state, visible_state, stream_output
             )
 
-            # 5) Optional BOS / EOS insertions
-            if should_insert_at_start(current_state, insert_at_start):
+            # 5) Optional BOS / EOS insertions (only if thinking is not complete)
+            if (not flow.thinking_complete and 
+                should_insert_at_start(current_state, insert_at_start)):
                 current_state = insert_text_at_position(
                     model, "start", current_state, sampler_cfg, insertion_text
                 )
-            elif should_insert_at_end(
-                current_state, insert_at_end, model_tokens["stop_token_ids"]
-            ):
+            elif (not flow.thinking_complete and 
+                  should_insert_at_end(current_state, insert_at_end, model_tokens["stop_token_ids"])):
                 current_state["track_end"] = True
                 current_state = insert_text_at_position(
                     model, "end", current_state, sampler_cfg, insertion_text
                 )
 
-            # 6) If flow decided it's time to insert reflection text
-            if flow.mode is GenerationMode.INSERTING and enable_insertion:
+            # 6) If flow decided it's time to insert reflection text (only if thinking is not complete)
+            if (flow.mode is GenerationMode.INSERTING and 
+                enable_insertion and 
+                not flow.thinking_complete):
                 current_state = insert_text_at_position(
                     model, "pause", current_state, sampler_cfg, insertion_text
                 )
@@ -865,7 +961,7 @@ def stream(
     enable_insertion: bool = True,
     insertion_text: str = " oh wait",
     insert_at_start: bool = False,
-    insert_at_end: bool = False
+    insert_at_end: bool = False,
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -879,7 +975,7 @@ def stream(
         enable_insertion=enable_insertion,
         insertion_text=insertion_text,
         insert_at_start=insert_at_start,
-        insert_at_end=insert_at_end
+        insert_at_end=insert_at_end,
     ):
         yield token_text, metrics, sampler_state, gen
 
@@ -896,7 +992,7 @@ def generate(
     enable_insertion: bool = True,
     insertion_text: str = " oh wait",
     insert_at_start: bool = False,
-    insert_at_end: bool = False
+    insert_at_end: bool = False,
 ) -> GenerationData:
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -910,7 +1006,7 @@ def generate(
         enable_insertion=enable_insertion,
         insertion_text=insertion_text,
         insert_at_start=insert_at_start,
-        insert_at_end=insert_at_end
+        insert_at_end=insert_at_end,
     ):
         if gen is not None:
             return gen
