@@ -32,8 +32,8 @@ def main():
         "--model_path", type=str, default="Qwen/Qwen3-8B", help="Path to the model"
     )
     parser.add_argument(
-        #"--prompt", type=str, default="Find the number of ordered pairs $(x,y)$, where both $x$ and $y$ are integers between $-100$ and $100$, inclusive, such that $12x^{2}-xy-6y^{2}=0$." #answer: 117
-        "--prompt", type=str, default="Which number is larger, 9.9 or 9.11?" 
+        "--prompt", type=str, default="Find the number of ordered pairs $(x,y)$, where both $x$ and $y$ are integers between $-100$ and $100$, inclusive, such that $12x^{2}-xy-6y^{2}=0$." #answer: 117
+        #"--prompt", type=str, default="Which number is larger, 9.9 or 9.11?" 
     )
     parser.add_argument(
         "--use_prm_model", action="store_true", help="Use PRM model for scoring"
@@ -72,8 +72,19 @@ def main():
     parser.add_argument(
         "--insertion_text", 
         type=str, 
-        default="Yes!", # "Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
         help="Text to insert during generation"
+    )
+    parser.add_argument(
+        "--max_insertions",
+        type=int,
+        default=3,
+        help="Maximum number of insertions allowed",
+    )
+    parser.add_argument(
+        "--enable_thinking", 
+        action="store_true", 
+        default=False,
+        help="Enable thinking mode during generation"
     )
     args = parser.parse_args()
 
@@ -83,7 +94,6 @@ def main():
     ]
 
     if args.threshold_strategy == "static":
-        # Static thresholds
         thresholds = Thresholds(
             logit_entropy=ThresholdLevel(low=1.2, medium=3, high=1),
             logit_varentropy=ThresholdLevel(low=3, medium=6.5, high=2),
@@ -141,12 +151,13 @@ def main():
         model,
         sampler_cfg,
         stream_output=True,
-        enable_thinking=True,
+        enable_thinking=args.enable_thinking,
         enable_uncertainty_detection=True,
         enable_insertion=True,
         insert_at_start=False,
         insert_at_end=False,
-        insertion_text=args.insertion_text
+        insertion_text=args.insertion_text, # "Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
+        max_insertions=args.max_insertions,
     )
     print("\n\n", "-"*50)
     print("Saving to output folder...")
