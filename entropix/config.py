@@ -53,14 +53,12 @@ class SamplerState(Enum):
     ADAPTIVE = "Adaptive sampling"
     TEMPERATURE = "Temperature sampling"
     PAUSE = "Pausing to think"
-    BRANCHING = "Branching"
 
 
 STATE_COLOR_MAP = {
     SamplerState.TEMPERATURE: "#FFA500",  # orange
     SamplerState.ADAPTIVE: "#800080",  # purple
     SamplerState.PAUSE: "#90EE90",  # lightgreen
-    SamplerState.BRANCHING: "#ADD8E6",  # lightblue
 }
 
 
@@ -254,11 +252,6 @@ class Coefficients(BaseModel):
     high_entropy_varentropy_attn: float = 0.5
 
 
-class Branching(BaseModel):
-    num_samples: int = 5
-    max_len: int = 5
-
-
 # Main SamplerConfig Model
 class SamplerConfig(BaseModel):
     temperature: float = 0.6
@@ -269,7 +262,6 @@ class SamplerConfig(BaseModel):
     adaptive: Adaptive = Adaptive()
     offsets: Offsets = Offsets()
     coefficients: Coefficients = Coefficients()
-    branching: Branching = Branching()
     self_feedback: bool = False
     cooldown_length: int = 30
 
@@ -294,11 +286,6 @@ class SamplerConfig(BaseModel):
             current = Coefficients().model_dump()
             cls._deep_update(current, values["coefficients"])
             values["coefficients"] = Coefficients.model_validate(current)
-
-        if isinstance(values.get("branching"), dict):
-            current = Branching().model_dump()
-            cls._deep_update(current, values["branching"])
-            values["branching"] = Branching.model_validate(current)
 
         return values
 
@@ -369,6 +356,13 @@ MODEL_CONFIG_OVERRIDES = {
         "n_layers": 28,
         "n_local_kv_heads": 8,
         "n_local_heads": 16,
+    },
+    "Qwen3-4B": {
+        "head_dim": 128,
+        "use_scaled_rope": False,
+        "n_layers": 36,
+        "n_local_kv_heads": 8,
+        "n_local_heads": 32,
     },
     "Qwen3-8B": {
         "head_dim": 128,

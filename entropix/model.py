@@ -5,6 +5,7 @@ import re
 from enum import Enum
 from dataclasses import asdict, dataclass, field
 from typing import Any, Generator, List, Literal, NamedTuple, Optional, Tuple
+import copy
 
 import numpy as np
 import torch
@@ -35,6 +36,174 @@ device = torch.device(
     if torch.cuda.is_available()
     else "cpu"
 )
+
+################################################################################
+#                             Branching System                                 #
+################################################################################
+
+
+class BranchState(Enum):
+    """State of a branch during generation."""
+    ACTIVE = "active"  # Branch is actively generating
+    TERMINATED = "terminated"  # Branch reached termination condition
+    SELECTED = "selected"  # Branch was selected as the best
+    PRUNED = "pruned"  # Branch was pruned during generation
+
+
+@dataclass
+class Branch:
+    """Represents a single branch during generation."""
+    id: str
+    state: BranchState
+    tokens: List[str]
+    token_ids: torch.Tensor
+    metrics: List[TokenMetrics]
+    sampler_states: List[SamplerState]
+    past_key_values: Any  # KV cache for this branch
+    response: str
+    length: int
+    parent_step: int  # Step where this branch was created
+    termination_step: Optional[int] = None  # Step where branch terminated
+    
+    def __post_init__(self):
+        self.length = len(self.tokens)
+    
+    def add_token(self, token: str, token_id: int, metrics: TokenMetrics, 
+                  sampler_state: SamplerState, past_kv: Any):
+        """Add a new token to this branch."""
+        self.tokens.append(token)
+        self.token_ids = torch.cat([self.token_ids, torch.tensor([[token_id]], device=device, dtype=torch.int32)], dim=1)
+        self.metrics.append(metrics)
+        self.sampler_states.append(sampler_state)
+        self.past_key_values = past_kv
+        self.response += token
+        self.length = len(self.tokens)
+    
+    def is_terminated(self) -> bool:
+        """Check if branch has reached termination condition."""
+        return self.state == BranchState.TERMINATED
+    
+    def should_terminate(self, token: str) -> bool:
+        """Check if current token should terminate this branch."""
+        # More lenient termination conditions for better branch exploration
+        return token.strip() in ["\n\n", ".\n\n", "?", "!", ";\n\n"] or "\n\n" in token
+    
+    def terminate(self, step: int):
+        """Mark this branch as terminated."""
+        self.state = BranchState.TERMINATED
+        self.termination_step = step
+
+
+@dataclass
+class BranchManager:
+    """Manages multiple branches during generation."""
+    branches: List[Branch] = field(default_factory=list)
+    active_branches: List[Branch] = field(default_factory=list)
+    terminated_branches: List[Branch] = field(default_factory=list)
+    selected_branch: Optional[Branch] = None
+    branch_width: int = 5
+    
+    def create_branches(self, base_state: dict, model: "Model", num_branches: Optional[int] = None) -> List[Branch]:
+        """Create multiple branches from the current state."""
+        if num_branches is None:
+            num_branches = self.branch_width
+        
+        branches = []
+        base_step = base_state["cur_seen_tokens"]
+        
+        for i in range(num_branches):
+            # Create a deep copy of the state for each branch
+            branch_state = self._deep_copy_state(base_state)
+            
+            branch = Branch(
+                id=f"branch_{base_step}_{i}",
+                state=BranchState.ACTIVE,
+                tokens=branch_state["gen_tokens_text"].copy(),
+                token_ids=branch_state["next_token"].clone(),  # Start from current token
+                metrics=branch_state["gen_metrics"].copy(),
+                sampler_states=branch_state["sampler_states"].copy(),
+                past_key_values=branch_state["past_key_values"],
+                response=branch_state["response"],
+                length=len(branch_state["gen_tokens_text"]),
+                parent_step=base_step,
+            )
+            branches.append(branch)
+        
+        self.branches.extend(branches)
+        self.active_branches.extend(branches)
+        return branches
+    
+    def _deep_copy_state(self, state: dict) -> dict:
+        """Create a deep copy of generation state for branching."""
+        # Create a new state dictionary
+        new_state = {}
+        for key, value in state.items():
+            if key == "past_key_values":
+                # Deep copy the KV cache
+                new_state[key] = self._deep_copy_kv_cache(value)
+            elif isinstance(value, torch.Tensor):
+                new_state[key] = value.clone()
+            elif isinstance(value, list):
+                new_state[key] = value.copy()
+            else:
+                new_state[key] = value
+        return new_state
+    
+    def _deep_copy_kv_cache(self, past_kv):
+        """Deep copy KV cache for branching."""
+        if past_kv is None:
+            return None
+        
+        # Create a new cache of the same type
+        new_cache = type(past_kv)()
+        
+        # Copy each layer's key-value pairs
+        for layer_idx in range(len(past_kv.key_cache)):
+            key_tensor = past_kv.key_cache[layer_idx]
+            value_tensor = past_kv.value_cache[layer_idx]
+            
+            if key_tensor is not None and value_tensor is not None:
+                new_cache.update(key_tensor.clone(), value_tensor.clone(), layer_idx)
+        
+        return new_cache
+    
+    def get_active_branches(self) -> List[Branch]:
+        """Get all active branches."""
+        return [b for b in self.branches if b.state == BranchState.ACTIVE]
+    
+    def terminate_branch(self, branch: Branch, step: int):
+        """Terminate a branch and move it to terminated list."""
+        branch.terminate(step)
+        if branch in self.active_branches:
+            self.active_branches.remove(branch)
+        if branch not in self.terminated_branches:
+            self.terminated_branches.append(branch)
+    
+    def rank_branches(self) -> List[Branch]:
+        """Rank branches by length (longer is better)."""
+        return sorted(self.terminated_branches, key=lambda b: b.length, reverse=True)
+    
+    def select_best_branch(self) -> Optional[Branch]:
+        """Select the best branch based on ranking."""
+        if not self.terminated_branches:
+            return None
+        
+        ranked_branches = self.rank_branches()
+        best_branch = ranked_branches[0]
+        best_branch.state = BranchState.SELECTED
+        self.selected_branch = best_branch
+        return best_branch
+    
+    def all_branches_terminated(self) -> bool:
+        """Check if all branches have terminated."""
+        return len(self.active_branches) == 0 and len(self.terminated_branches) > 0
+    
+    def clear(self):
+        """Clear all branches."""
+        self.branches.clear()
+        self.active_branches.clear()
+        self.terminated_branches.clear()
+        self.selected_branch = None
 
 ################################################################################
 #                                    Types                                     #
@@ -122,14 +291,11 @@ class GenerationData:
     response: str
     tokens: list[str]
     messages: list[Message]
-    branches: list[list[dict]]
     metrics: list[TokenMetrics]
     sampler_cfg: SamplerConfig
     sampler_states: list[SamplerState]
-    branch_count: int = 0
-    branch_choices: List[int] = field(default_factory=list)
-    branch_pairwise_similarities: List[List[float]] = field(default_factory=list)
     threshold_history: List[dict] = field(default_factory=list)
+    branches: List[dict] = field(default_factory=list)  # Store branch exploration data
 
     def to_dict(self):
         return {
@@ -137,14 +303,11 @@ class GenerationData:
             "response": self.response,
             "tokens": self.tokens,
             "messages": [m.model_dump() for m in self.messages],
-            "branches": self.branches,
             "metrics": [asdict(m) for m in self.metrics],
             "sampler_cfg": self.sampler_cfg.model_dump(),
             "sampler_states": [s.name for s in self.sampler_states],
-            "branch_count": self.branch_count,
-            "branch_choices": self.branch_choices,
-            "branch_pairwise_similarities": self.branch_pairwise_similarities,
             "threshold_history": self.threshold_history,
+            "branches": self.branches,
         }
 
     def save(self, fp: str):
@@ -160,7 +323,6 @@ class GenerationData:
         with open(fp, "rb") as f:
             data = json.load(f)
         defaults = {
-            "branches": [],
             "metrics": [],
             "messages": [],
             "tokens": [],
@@ -169,6 +331,7 @@ class GenerationData:
             "response": "",
             "sampler_cfg": SamplerConfig().model_dump(),
             "threshold_history": [],
+            "branches": [],
         }
         for k, default in defaults.items():
             if k not in data:
@@ -185,18 +348,15 @@ class GenerationData:
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
         defaults = {
-            "branches": [],
             "metrics": [],
             "messages": [],
             "tokens": [],
             "sampler_states": [],
             "prompt": "",
             "response": "",
-            "branch_count": 0,
-            "branch_choices": [],
-            "branch_pairwise_similarities": [],
             "sampler_cfg": SamplerConfig().model_dump(),
             "threshold_history": [],
+            "branches": [],
         }
         for k, default in defaults.items():
             if k not in data:
@@ -216,24 +376,6 @@ class GenerationData:
 ################################################################################
 
 
-@dataclass
-class Branch:
-    tokens: torch.Tensor | list
-    kvcache: KVCache
-    cur_pos: int
-    tokens_text: list[str] = field(default_factory=list)
-    metrics: list[TokenMetrics] = field(default_factory=list)
-    sampler_states: list[SamplerState] = field(default_factory=list)
-
-    def to_dict(self):
-        return {
-            "tokens": [t.item() for t in self.tokens],
-            "tokens_text": self.tokens_text,
-            "metrics": [asdict(m) for m in self.metrics],
-            "sampler_states": [s.name for s in self.sampler_states],
-        }
-
-
 class GenerationMode(Enum):
     """High-level generation mode used by FlowController."""
 
@@ -242,6 +384,8 @@ class GenerationMode(Enum):
     INSERTING = "inserting"  # Currently injecting reflection text
     COOLDOWN = "cooldown"  # Cooldown period to avoid immediate re-trigger
     THINKING_COMPLETE = "thinking_complete"  # Thinking phase completed, no more insertions
+    BRANCHING = "branching"  # Creating and exploring multiple branches
+    BRANCH_SELECTION = "branch_selection"  # Selecting best branch after exploration
 
 @dataclass
 class FlowController:
@@ -253,11 +397,27 @@ class FlowController:
     last_pause_step: int = -9999  # step index of last completed pause
     thinking_complete: bool = False  # flag to track if thinking phase is complete
     insertion_count: int = 0
+    branch_manager: Optional[BranchManager] = None
+    enable_branching: bool = False
+    branch_width: int = 5
+    branching_trigger_step: int = -9999  # step where branching was triggered
+    
+    def __post_init__(self):
+        if self.enable_branching and self.branch_manager is None:
+            self.branch_manager = BranchManager(branch_width=self.branch_width)
 
     def request_pause(self, step: int):
         """Sampler signalled uncertainty – attempt to enter TRIGGERED."""
         if not (step - self.last_pause_step) < self.cfg.cooldown_length:
             self.mode = GenerationMode.TRIGGERED
+
+    def request_branching(self, step: int):
+        """Request branching mode when uncertainty is detected."""
+        if self.enable_branching and not (step - self.last_pause_step) < self.cfg.cooldown_length:
+            self.mode = GenerationMode.BRANCHING
+            self.branching_trigger_step = step  # Record the step where branching was triggered
+            return True
+        return False
 
     def on_token_sampled(
         self,
@@ -278,7 +438,7 @@ class FlowController:
         if (
             self.mode is GenerationMode.TRIGGERED
             and not self.thinking_complete
-            and should_stop_branch(token_text)
+            and should_trigger_insertion(token_text)
         ):
             self.mode = GenerationMode.INSERTING
 
@@ -287,6 +447,22 @@ class FlowController:
         self.mode = GenerationMode.COOLDOWN
         self.last_pause_step = step
         self.insertion_count += 1
+    
+    def branching_complete(self, step: int):
+        """Call after branching is done."""
+        self.mode = GenerationMode.COOLDOWN
+        # Use the original trigger step for cooldown calculation, not the final step
+        self.last_pause_step = self.branching_trigger_step
+        if self.branch_manager:
+            self.branch_manager.clear()
+    
+    def should_branch(self, step: int) -> bool:
+        """Check if branching should be triggered."""
+        return (
+            self.enable_branching 
+            and self.mode == GenerationMode.BRANCHING
+            and not (step - self.last_pause_step) < self.cfg.cooldown_length
+        )
 
 
 ################################################################################
@@ -540,13 +716,8 @@ def initialize_generation_state(
         "gen_tokens_text": [],
         "gen_logits": [],
         "gen_metrics": [],
-        "gen_branches": [],
         "sampler_states": [],
         "threshold_history": [],
-        "branch_count": 0,
-        "branch_choices": [],
-        "all_pairwise_similarities": [],
-        "track_end": False,
         "print_stream": False,  # Will be set by caller
     }
 
@@ -561,36 +732,10 @@ def build_generation_data(
         response=current_state["response"],
         tokens=current_state["gen_tokens_text"],
         messages=messages,
-        branches=current_state["gen_branches"],
         metrics=current_state["gen_metrics"],
         sampler_cfg=current_state["sampler_cfg"],
         sampler_states=current_state["sampler_states"],
-        branch_count=current_state["branch_count"],
-        branch_choices=current_state["branch_choices"],
-        branch_pairwise_similarities=current_state["all_pairwise_similarities"],
         threshold_history=current_state["threshold_history"],
-    )
-
-
-def should_stop_branch(token_text):
-    return (
-        True
-        if token_text
-        in (
-            "\n\n",
-            ",\n\n",
-            ".\n\n",
-            "]\n\n",
-            ")\n\n",
-            "],\n\n",
-            "].\n\n",
-            "].\n\n",
-            ").\n\n",
-            ".)\n\n",
-            "?\n\n",
-            "!\n\n",
-        )
-        else False
     )
 
 
@@ -850,6 +995,221 @@ def plan_next_step(
         return next_step_text
 
 
+def should_trigger_insertion(token_text: str) -> bool:
+    """
+    Determines if the current token represents a natural pause point where
+    reflection text should be inserted.
+    
+    This function looks for token patterns that indicate the model has reached
+    a natural stopping point in its reasoning process, such as double newlines
+    or punctuation followed by double newlines.
+    
+    Args:
+        token_text: The text of the current token
+        
+    Returns:
+        True if this token represents a natural pause point for insertion
+    """
+    return token_text in (
+        "\n\n",
+        ",\n\n", 
+        ".\n\n",
+        "]\n\n",
+        ")\n\n",
+        "],\n\n",
+        "].\n\n",
+        ").\n\n",
+        ".)\n\n",
+        "?\n\n",
+        "!\n\n",
+    )
+
+
+def explore_branches(
+    base_state: dict,
+    model: "Model",
+    sampler_cfg: SamplerConfig,
+    branch_manager: BranchManager,
+    threshold_manager: Optional[DynamicThresholdManager] = None,
+    max_branch_tokens: int = 50,
+    stream_output: bool = False,
+) -> Optional[Branch]:
+    """
+    Explore multiple branches from the current state until termination.
+    
+    Args:
+        base_state: Current generation state
+        model: Model for generation
+        sampler_cfg: Sampler configuration
+        branch_manager: Branch manager instance
+        threshold_manager: Optional threshold manager
+        max_branch_tokens: Maximum tokens to generate per branch
+        stream_output: Whether to stream output
+        
+    Returns:
+        Selected best branch or None if no branches terminated
+    """
+    if stream_output:
+        rprint(f"\n[yellow]--- BRANCHING: Creating {branch_manager.branch_width} branches ---[/yellow]")
+    
+    # Create branches from current state
+    branches = branch_manager.create_branches(base_state, model)
+    
+    # Continue each branch until termination
+    step = 0
+    while branch_manager.get_active_branches() and step < max_branch_tokens:
+        active_branches = branch_manager.get_active_branches()
+        
+        for branch in active_branches:
+            if branch.is_terminated():
+                continue
+                
+            # Generate next token for this branch
+            with torch.inference_mode():
+                outputs = model.weights(
+                    input_ids=branch.token_ids[:, -1:],  # Use last token
+                    past_key_values=branch.past_key_values,
+                    use_cache=True,
+                    output_attentions=True,
+                    output_hidden_states=False,
+                )
+                
+                # Calculate metrics
+                metrics = calculate_metrics(outputs.logits, outputs.attentions[-1])
+                
+                # Sample next token with diverse sampling strategies for better branch diversity
+                branch_idx = int(branch.id.split('_')[-1])
+                branch_seed = (1337 + step * 100 + branch_idx * 10000 + 
+                             hash(branch.id) % 1000 + len(branch.tokens) * 17) % (2**32)
+                branch_generator = torch.Generator(device=device).manual_seed(branch_seed)
+                
+                # Use diverse temperature sampling strategies for better branch diversity
+                # Temperature range: 0.2 to 1.0 with more aggressive spread
+                temperatures = [0.2, 0.5, 0.8, 0.95, 1.0]
+                branch_temperature = temperatures[branch_idx % len(temperatures)]
+                
+                # Also vary top-k, top-p, and min-p for additional diversity
+                top_k_values = [5, 10, 20, 40, 0]  # 0 means no top-k filtering
+                top_p_values = [0.5, 0.7, 0.9, 0.95, 1.0]
+                min_p_values = [0.01, 0.05, 0.1, 0.2, 0.0]  # 0.0 means no min-p filtering
+                
+                branch_top_k = top_k_values[branch_idx % len(top_k_values)]
+                branch_top_p = top_p_values[branch_idx % len(top_p_values)]
+                branch_min_p = min_p_values[branch_idx % len(min_p_values)]
+                
+                # Apply temperature
+                logits = outputs.logits[:, -1] / branch_temperature
+                
+                # Apply min-p filtering (scales with max probability)
+                if branch_min_p > 0.0:
+                    # Convert to probabilities to find max prob
+                    probs = torch.softmax(logits, dim=-1)
+                    max_prob = torch.max(probs, dim=-1, keepdim=True)[0]
+                    min_threshold = branch_min_p * max_prob
+                    
+                    # Filter out tokens below threshold
+                    mask = probs < min_threshold
+                    logits[mask] = float('-inf')
+                
+                # Apply top-k filtering
+                if branch_top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(logits, branch_top_k, dim=-1)
+                    logits = torch.full_like(logits, float('-inf'))
+                    logits.scatter_(-1, top_k_indices, top_k_logits)
+                
+                # Apply top-p (nucleus) sampling
+                if branch_top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+                    cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                    
+                    # Remove tokens with cumulative probability above the threshold
+                    sorted_indices_to_remove = cumulative_probs > branch_top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    
+                    # Scatter to original indices
+                    indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+                    logits[indices_to_remove] = float('-inf')
+                
+                # Sample from the processed distribution
+                probs = torch.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1, generator=branch_generator)
+                
+                # Set a simple sampler state for branches
+                sampler_state = SamplerState.ADAPTIVE
+                
+                # Decode token
+                token_text = model.tokenizer.decode([next_token.item()])
+                
+                # Add token to branch
+                branch.add_token(
+                    token_text,
+                    int(next_token.item()),
+                    metrics,
+                    sampler_state,
+                    outputs.past_key_values
+                )
+                
+                # Check for termination
+                if branch.should_terminate(token_text):
+                    branch_manager.terminate_branch(branch, step)
+        
+        step += 1
+        
+        # Check if all branches terminated
+        if branch_manager.all_branches_terminated():
+            break
+    
+    # Force terminate any remaining active branches
+    for branch in branch_manager.get_active_branches():
+        branch_manager.terminate_branch(branch, step)
+    
+    # Show branch contents
+    if stream_output:
+        rprint(f"\n[yellow]--- BRANCH CONTENTS ---[/yellow]")
+        for i, branch in enumerate(branch_manager.branches):
+            # Get the new content generated by this branch (after the branching point)
+            branch_start_length = len(base_state["gen_tokens_text"])
+            new_content = "".join(branch.tokens[branch_start_length:])
+            
+            # Show sampling parameters used for this branch
+            temperatures = [0.2, 0.5, 0.8, 0.95, 1.0]
+            top_k_values = [5, 10, 20, 40, 0]
+            top_p_values = [0.5, 0.7, 0.9, 0.95, 1.0]
+            min_p_values = [0.01, 0.05, 0.1, 0.2, 0.0]
+            
+            branch_temp = temperatures[i % len(temperatures)]
+            branch_top_k = top_k_values[i % len(top_k_values)]
+            branch_top_p = top_p_values[i % len(top_p_values)]
+            branch_min_p = min_p_values[i % len(min_p_values)]
+            
+            # Format branch content with proper styling
+            branch_num = i + 1
+            rprint(f"[cyan]Branch {branch_num}[/cyan] [dim]({branch.length} tokens)[/dim] [yellow]T={branch_temp} K={branch_top_k} P={branch_top_p} MinP={branch_min_p}[/yellow]:")
+            if new_content.strip():
+                rprint(f"[white]  \"{new_content}\"[/white]")
+            else:
+                rprint(f"[dim]  (no new content)[/dim]")
+            rprint()  # Empty line for spacing
+    
+    if stream_output:
+        rprint(f"[yellow]--- BRANCH SELECTION ---[/yellow]")
+        ranked_branches = branch_manager.rank_branches()
+        for i, branch in enumerate(ranked_branches[:3]):  # Show top 3 only
+            branch_num = branch_manager.branches.index(branch) + 1
+            rprint(f"[dim]#{i+1}: Branch {branch_num} ({branch.length} tokens)[/dim]")
+    
+    # Select best branch
+    best_branch = branch_manager.select_best_branch()
+    
+    if best_branch and stream_output:
+        selected_branch_num = branch_manager.branches.index(best_branch) + 1
+        rprint(f"[green]Selected: Branch {selected_branch_num} ({best_branch.length} tokens)[/green]")
+        rprint(f"[yellow]--- BRANCHING COMPLETE ---[/yellow]")
+    
+    return best_branch
+
+
 def _generate(
     messages: list[Message] | list[dict[str, str]] | str,
     model: Model,
@@ -864,6 +1224,9 @@ def _generate(
     insert_at_start: bool = False,
     insert_at_end: bool = False,
     max_insertions: int = 5,
+    enable_branching: bool = False,
+    branch_width: int = 5,
+    max_branch_tokens: int = 50,
 ) -> Generator[
     Tuple[
         Optional[str],
@@ -893,7 +1256,12 @@ def _generate(
     current_state["print_stream"] = stream_output
     current_state["sampler_cfg"] = sampler_cfg
 
-    flow = FlowController(sampler_cfg, max_insertions=max_insertions)
+    flow = FlowController(
+        sampler_cfg, 
+        max_insertions=max_insertions, 
+        enable_branching=enable_branching,
+        branch_width=branch_width
+    )
 
     # 3. Get model-specific tokens
     model_tokens = get_model_tokens(model.tokenizer)
@@ -989,7 +1357,7 @@ def _generate(
                 metrics,
                 sampler_cfg,
                 threshold_manager=threshold_manager,
-                can_branch=enable_uncertainty_detection
+                enable_uncertainty_detection=enable_uncertainty_detection
                 and current_state["cur_seen_tokens"] >= current_state["seqlen"],
                 current_step=current_state["cur_seen_tokens"],
                 last_pause_step=flow.last_pause_step,
@@ -1003,9 +1371,60 @@ def _generate(
                 }
             )
 
-            # 1) Signal potential pause from sampler
+            # 1) Signal potential pause or branching from sampler
             if sampler_state is SamplerState.PAUSE:
-                flow.request_pause(current_state["cur_seen_tokens"])
+                if enable_branching:
+                    # Try branching instead of insertion
+                    if flow.request_branching(current_state["cur_seen_tokens"]):
+                        # Perform branching
+                        if flow.branch_manager:
+                            best_branch = explore_branches(
+                                current_state,
+                                model,
+                                sampler_cfg,
+                                flow.branch_manager,
+                                threshold_manager,
+                                max_branch_tokens,
+                                stream_output
+                            )
+                            
+                            if best_branch:
+                                # Get only the new tokens generated by the branch (after branching point)
+                                branch_start_length = len(current_state["gen_tokens_text"])
+                                new_tokens = best_branch.tokens[branch_start_length:]
+                                new_metrics = best_branch.metrics[branch_start_length:]
+                                new_sampler_states = best_branch.sampler_states[branch_start_length:]
+                                
+                                if new_tokens:
+                                    # Extend current state with new branch tokens
+                                    current_state["gen_tokens_text"].extend(new_tokens)
+                                    current_state["gen_metrics"].extend(new_metrics)
+                                    current_state["sampler_states"].extend(new_sampler_states)
+                                    current_state["response"] += "".join(new_tokens)
+                                    current_state["past_key_values"] = best_branch.past_key_values
+                                    current_state["next_token"] = best_branch.token_ids[:, -1:]
+                                    
+                                    # Update current token info
+                                    current_state["token_text"] = new_tokens[-1]
+                                    current_state["metrics"] = new_metrics[-1]
+                                    
+                                    # Complete branching
+                                    flow.branching_complete(current_state["cur_seen_tokens"])
+                                    
+                                    # Yield the new tokens from the selected branch
+                                    for token, branch_metrics, branch_sampler_state in zip(
+                                        new_tokens, new_metrics, new_sampler_states
+                                    ):
+                                        yield (token, branch_metrics, branch_sampler_state, None)
+                                    
+                                    # Continue with the merged state
+                                    continue
+                    else:
+                        # Fall back to normal pause behavior
+                        flow.request_pause(current_state["cur_seen_tokens"])
+                else:
+                    # Normal pause behavior
+                    flow.request_pause(current_state["cur_seen_tokens"])
 
             # 2) Update flow state with the freshly sampled token
             flow.on_token_sampled(
@@ -1024,6 +1443,8 @@ def _generate(
                     GenerationMode.TRIGGERED,
                     GenerationMode.INSERTING,
                     GenerationMode.THINKING_COMPLETE,
+                    GenerationMode.BRANCHING,
+                    GenerationMode.BRANCH_SELECTION,
                 )
                 else sampler_state
             )
@@ -1103,6 +1524,9 @@ def stream(
     insert_at_start: bool = False,
     insert_at_end: bool = False,
     max_insertions: int = 5,
+    enable_branching: bool = False,
+    branch_width: int = 5,
+    max_branch_tokens: int = 50,
 ):
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -1118,6 +1542,9 @@ def stream(
         insert_at_start=insert_at_start,
         insert_at_end=insert_at_end,
         max_insertions=max_insertions,
+        enable_branching=enable_branching,
+        branch_width=branch_width,
+        max_branch_tokens=max_branch_tokens,
     ):
         yield token_text, metrics, sampler_state, gen
 
@@ -1136,6 +1563,9 @@ def generate(
     insert_at_start: bool = False,
     insert_at_end: bool = False,
     max_insertions: int = 5,
+    enable_branching: bool = False,
+    branch_width: int = 5,
+    max_branch_tokens: int = 50,
 ) -> GenerationData:
     for token_text, metrics, sampler_state, gen in _generate(
         messages=messages,
@@ -1151,6 +1581,9 @@ def generate(
         insert_at_start=insert_at_start,
         insert_at_end=insert_at_end,
         max_insertions=max_insertions,
+        enable_branching=enable_branching,
+        branch_width=branch_width,
+        max_branch_tokens=max_branch_tokens,
     ):
         if gen is not None:
             return gen

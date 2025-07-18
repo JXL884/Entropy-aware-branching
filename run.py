@@ -86,6 +86,24 @@ def main():
         default=False,
         help="Enable thinking mode during generation"
     )
+    parser.add_argument(
+        "--enable_branching",
+        action="store_true",
+        default=False,
+        help="Enable branching mode during high uncertainty moments"
+    )
+    parser.add_argument(
+        "--branch_width",
+        type=int,
+        default=5,
+        help="Number of branches to create during uncertainty"
+    )
+    parser.add_argument(
+        "--max_branch_tokens",
+        type=int,
+        default=50,
+        help="Maximum tokens to generate per branch"
+    )
     args = parser.parse_args()
 
     messages = [
@@ -122,6 +140,11 @@ def main():
         print(f"  Min Samples: {args.ewma_min_samples}")
         print(f"  Initial Multiplier: {args.ewma_initial_multiplier}")
         print(f"  Decay Factor: {args.ewma_decay_factor}")
+    
+    if args.enable_branching:
+        print(f"Branching enabled with {args.branch_width} branches, max {args.max_branch_tokens} tokens per branch")
+    else:
+        print("Branching disabled - using insertion strategy")
 
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -158,6 +181,9 @@ def main():
         insert_at_end=False,
         insertion_text=args.insertion_text, # "Considering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>.\n\n")
         max_insertions=args.max_insertions,
+        enable_branching=args.enable_branching,
+        branch_width=args.branch_width,
+        max_branch_tokens=args.max_branch_tokens,
     )
     print("\n\n", "-"*50)
     print("Saving to output folder...")

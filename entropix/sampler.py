@@ -164,53 +164,13 @@ def adaptive_sample(
     sampled_token = samples[best_sample_idx]
     return sampled_token
 
-def branching_sample(logits: torch.Tensor, metrics: TokenMetrics, cfg: SamplerConfig, generator: torch.Generator | None = None) -> torch.Tensor:
-    """
-    Samples multiple tokens from the given logits using temperature sampling.
-
-    Args:
-        logits: Tensor of shape [vocab_size].
-        metrics: TokenMetrics object containing entropy and variance metrics.
-        cfg: SamplerConfig object containing sampling parameters.
-        generator: Optional random generator for reproducibility.
-
-    Returns:
-        Tensor of shape [num_samples] containing the sampled token indices.
-    """
-
-    # TODO: should we set temperature differently?
-    temp_adj = cfg.offsets.low_entropy_interaction_strength + cfg.coefficients.low_entropy_interaction_strength * metrics.interaction_strength
-    temperature = min(1.5, cfg.temperature * temp_adj)
-
-    # NOTE: only using temperature sampling in branches right now
-    # TODO: cleanup / setup AB tests to find best branch sampling method
-
-    device = logits.device
-    logits = logits[:, -1]
-
-    # # Convert logits to probabilities
-    probs = F.softmax(logits, dim=-1)
- 
-    num_available_tokens = int((probs > 0).sum().item())
-
-    # Adjust num_samples if necessary
-    num_samples_to_draw = min(cfg.branching.num_samples, num_available_tokens)
-
-    if num_samples_to_draw == 0:
-        raise ValueError("No tokens available to sample after filtering. Adjust the sampling parameters.")
-
-    # currently the shape is [[num_samples]] help me flatten it to just [num_samples]
-    sampled_tokens = temperature_sample(logits, temperature=temperature, num_samples=num_samples_to_draw, generator=generator)
-    # sampled_tokens = sampled_tokens.squeeze(0)  # Remove the extra dimension
-    return sampled_tokens.to(torch.int32)  
-
 def sample(
     logits: torch.Tensor,
     attention_scores: torch.Tensor,
     metrics: TokenMetrics,
     cfg: SamplerConfig,
     threshold_manager: Optional[DynamicThresholdManager] = None,
-    can_branch: bool = False,
+    enable_uncertainty_detection: bool = False,
     generator: torch.Generator = torch.Generator(device=device).manual_seed(1337),
     current_step: int = 0,
     last_pause_step: int = -9999
@@ -222,7 +182,6 @@ def sample(
     - ADAPTIVE: Default state using adaptive sampling with temperature, top-p, top-k, and min-p
     - PAUSE: Triggered when entropy and varentropy are high (uncertainty detected)
     - TEMPERATURE: Available for future temperature-only sampling
-    - BRANCHING: Available for future parallel branching (currently falls back to ADAPTIVE)
     
     Args:
         logits: Model output logits
@@ -230,7 +189,7 @@ def sample(
         metrics: Token-level entropy and variance metrics
         cfg: Sampler configuration
         threshold_manager: Optional dynamic threshold manager for adaptive thresholds
-        can_branch: Whether branching is allowed
+        enable_uncertainty_detection: Whether to detect high uncertainty and trigger PAUSE state
         generator: Random generator for reproducibility
         current_step: Current generation step
         last_pause_step: Last step when pause was triggered (for cooldown)
@@ -251,8 +210,8 @@ def sample(
     else:
         current_thresholds = cfg.thresholds
     
-    # Check if we should trigger pause/branching logic
-    if can_branch and (
+    # Check if we should trigger pause/uncertainty detection logic
+    if enable_uncertainty_detection and (
         metrics.logit_entropy > current_thresholds.logit_entropy.high
         and metrics.logit_varentropy > current_thresholds.logit_varentropy.high 
         and current_step > 30
